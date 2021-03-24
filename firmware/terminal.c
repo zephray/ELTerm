@@ -1,0 +1,471 @@
+//
+// Copyright 2021 Wenting Zhang <zephray@outlook.com>
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+// 
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+//
+#include <stdio.h>
+#include "pico/stdlib.h"
+#include "graphics.h"
+#include "terminal.h"
+#include "serial.h"
+
+#define TERM_WIDTH 80
+#define TERM_HEIGHT 30
+#define MAX_DEBUG_LEN 107
+char debugmsg[MAX_DEBUG_LEN];
+
+typedef struct {
+    char textmap[TERM_HEIGHT][TERM_WIDTH];
+    char flagmap[TERM_HEIGHT][TERM_WIDTH];
+    char colormap[TERM_HEIGHT][TERM_WIDTH];
+    int x, y;
+} TERM_STATE;
+
+typedef enum {
+    ST_NORMAL,
+    ST_ANSI_ESCAPE,
+    ST_CSI_SEQ
+} PARSER_STATE;
+
+TERM_STATE term_state_back;
+TERM_STATE term_state_front;
+bool term_state_dirty;
+
+#define FLAG_BOLD (0x80)
+#define FLAG_ITALIC (0x40)
+#define FLAG_UNDERLINE (0x20)
+#define FLAG_STHROUGH (0x10)
+#define FLAG_SLOWBLINK (0x08)
+#define FLAG_FASTBLINK (0x04)
+
+#define COLOR_BLACK (0)
+#define COLOR_RED (1)
+#define COLOR_GREEN (1)
+#define COLOR_BROWN (1)
+#define COLOR_BLUE (1)
+#define COLOR_MAGENTA (2)
+#define COLOR_CYAN (2)
+#define COLOR_WHITE (7)
+#define COLOR_GRAY (3)
+#define COLOR_BRIGHT_RED (3)
+#define COLOR_BRIGHT_GREEN (3)
+#define COLOR_BRIGHT_YELLOW (4)
+#define COLOR_BRIGHT_BLUE (3)
+#define COLOR_BRIGHT_MAGENTA (4)
+#define COLOR_BRIGHT_CYAN (4)
+#define COLOR_BRIGHT_WHITE (7)
+
+#define DEFAULT_COLOR ((COLOR_WHITE << 4) | (COLOR_BLACK))
+
+static bool cursor_state = false;
+static volatile bool timer_pending = false;
+static char current_color = DEFAULT_COLOR;
+static char current_flag = 0;
+
+void term_scroll() {
+    // TODO
+    term_state_back.y++;
+    if (term_state_back.y >= TERM_HEIGHT) {
+        // Scroll
+        term_state_back.y = 0;
+    }
+    term_state_dirty = true;
+}
+
+void term_cursor_backward() {
+    if (term_state_back.x > 0) {
+        term_state_back.x--;
+    }
+    else {
+        if (term_state_back.y > 0) {
+            term_state_back.x = TERM_WIDTH - 1;
+            term_state_back.y--;
+        }
+    }
+    term_state_dirty = true;
+}
+
+void term_cursor_forward() {
+    term_state_back.x++;
+    if (term_state_back.x >= TERM_WIDTH) {
+        term_state_back.x = 0;
+        term_scroll();
+    }
+    term_state_dirty = true;
+}
+
+void term_cursor_set(int x, int y) {
+    term_state_back.x = x;
+    term_state_back.y = y;
+    term_state_dirty = true;
+}
+
+void term_clear_cursor() {
+    int x = term_state_front.x;
+    int y = term_state_front.y;
+    char text = term_state_front.textmap[y][x];
+    char color = term_state_front.colormap[y][x];
+    char fg = (uint8_t)color >> 4;
+    char bg = color & 0xf;
+    if (text != ' ') {
+        graph_put_char(x * 8, y * 16, text, fg, bg);
+    }
+    else {
+        graph_fill_rect(x * 8, y * 16, (x + 1) * 8, (y + 1) * 16, bg);
+    }
+}
+
+void term_disp_cursor() {
+    int x = term_state_front.x;
+    int y = term_state_front.y;
+    graph_fill_rect(x * 8, y * 16, (x + 1) * 8, (y + 1) * 16, COLOR_WHITE);
+}
+
+void term_update_cursor() {
+    if (cursor_state) {
+        term_disp_cursor();
+    }
+    else {
+        term_clear_cursor();
+    }
+}
+
+bool term_timer_callback(struct repeating_timer *t) {
+    timer_pending = true;
+    return true;
+}
+
+void term_show_debug_message(char *str) {
+    char c;
+    int x = 1, y = 471;
+    graph_fill_rect(0, 471, 640, 480, COLOR_WHITE);
+    while (c = *str++) {
+        graph_put_char_small(x, y, c, COLOR_BLACK, COLOR_WHITE);
+        x += 6;
+    }
+}
+
+static void term_put_char(int x, int y, char c) {
+    term_state_back.textmap[y][x] = c;
+    term_state_back.flagmap[y][x] = current_flag;
+    term_state_back.colormap[y][x] = current_color;
+    term_state_dirty = true;
+}
+
+static void term_set_fg(char fg) {
+    current_color &= 0x0f;
+    current_color |= (fg << 4);
+}
+
+static void term_set_bg(char bg) {
+    current_color &= 0xf0;
+    current_color |= bg;
+}
+
+void term_process_char(char c) {
+    // States
+    static char csi[5];
+    static int csi_codes[5];
+    static int arg_counter = 0;
+    static int chr_counter = 0;
+    static PARSER_STATE state = ST_NORMAL;
+    int x = term_state_back.x;
+    int y = term_state_back.y;
+
+    term_clear_cursor();
+    if (state == ST_NORMAL) {
+        if ((c == 0x08) || (c == 0x7f)) {
+            // BS
+            term_cursor_backward();
+        }
+        else if (c == 0x0d) {
+            // CR
+            term_state_back.x = 0;
+            term_scroll();
+        }
+        else if ((c == 0x0a) || (c == 0x0b) || (c == 0x0c)) {
+            // LF
+            term_scroll();
+        }
+        else if (c == 0x09) {
+            // Tab
+            x += 7;
+            x &= ~3;
+            term_cursor_set(x, y);
+            if (x >= TERM_WIDTH) {
+                term_cursor_set(0, y);
+                term_scroll();
+            }
+        }
+        else if (c == 0x1b) {
+            state = ST_ANSI_ESCAPE;
+        }
+        else {
+            term_put_char(x, y, c);
+            term_cursor_forward();
+        }
+    }
+    else if (state == ST_ANSI_ESCAPE) {
+        if (c == '[') {
+            state = ST_CSI_SEQ;
+            arg_counter = 0;
+            chr_counter = 0;
+        }
+        else {
+            snprintf(debugmsg, MAX_DEBUG_LEN, "Unsupported escape sequence: %c", c);
+            term_show_debug_message(debugmsg);
+            state = ST_NORMAL;
+        }
+    }
+    else if (state == ST_CSI_SEQ) {
+        if ((c >= 0x30) && (c <= 0x39)) {
+            csi[chr_counter++] = c;
+            if (chr_counter > 4) {
+                term_show_debug_message("CSI sequence argument too long");
+                state = ST_NORMAL;
+            }
+        }
+        else {
+            csi[chr_counter] = '\0';
+            if (chr_counter == 0) {
+                csi_codes[arg_counter++] = 1;
+            }
+            else {
+                csi_codes[arg_counter++] = atoi(csi);
+            }
+            if (arg_counter > 4) {
+                term_show_debug_message("Too many arguments in one CSI sequence");
+                state = ST_NORMAL;
+                return;
+            }
+            if (c == 'm') {
+                // SGR sequcne
+                for (int i = 0; i < arg_counter; i++) {
+                    switch (csi_codes[i]) {
+                    case 0: // Reset
+                        current_flag = 0;
+                        current_color = DEFAULT_COLOR;
+                        break;
+                    case 1: // Bold
+                        current_flag |= FLAG_BOLD; break;
+                    case 3: // Italic
+                        current_flag |= FLAG_ITALIC; break;
+                    case 4: // Underline
+                        current_flag |= FLAG_UNDERLINE; break;
+                    case 5: // Slow blink
+                        current_flag |= FLAG_SLOWBLINK; break;
+                    case 9: // Croseed out
+                        current_flag |= FLAG_STHROUGH; break;
+                    case 22: // Bold off
+                        current_flag &= ~FLAG_BOLD; break;
+                    case 23: // Italic off
+                        current_flag &= ~FLAG_ITALIC; break;
+                    case 24: // Underline off
+                        current_flag &= ~FLAG_UNDERLINE; break;
+                    case 25: // Blink off
+                        current_flag &= ~FLAG_SLOWBLINK; break;
+                    case 26: // Crossed out off
+                        current_flag &= ~FLAG_STHROUGH; break;
+                    case 30: term_set_fg(COLOR_BLACK); break;
+                    case 31: term_set_fg(COLOR_RED); break;
+                    case 32: term_set_fg(COLOR_GREEN); break;
+                    case 33: term_set_fg(COLOR_BROWN); break;
+                    case 34: term_set_fg(COLOR_BLUE); break;
+                    case 35: term_set_fg(COLOR_MAGENTA); break;
+                    case 36: term_set_fg(COLOR_CYAN); break;
+                    case 37: term_set_fg(COLOR_WHITE); break;
+                    case 90: term_set_fg(COLOR_GRAY); break;
+                    case 91: term_set_fg(COLOR_BRIGHT_RED); break;
+                    case 92: term_set_fg(COLOR_BRIGHT_GREEN); break;
+                    case 93: term_set_fg(COLOR_BRIGHT_YELLOW); break;
+                    case 94: term_set_fg(COLOR_BRIGHT_BLUE); break;
+                    case 95: term_set_fg(COLOR_BRIGHT_MAGENTA); break;
+                    case 96: term_set_fg(COLOR_BRIGHT_CYAN); break;
+                    case 97: term_set_fg(COLOR_BRIGHT_WHITE); break;
+                    case 40: term_set_bg(COLOR_BLACK); break;
+                    case 41: term_set_bg(COLOR_RED); break;
+                    case 42: term_set_bg(COLOR_GREEN); break;
+                    case 43: term_set_bg(COLOR_BROWN); break;
+                    case 44: term_set_bg(COLOR_BLUE); break;
+                    case 45: term_set_bg(COLOR_MAGENTA); break;
+                    case 46: term_set_bg(COLOR_CYAN); break;
+                    case 47: term_set_bg(COLOR_WHITE); break;
+                    case 100:term_set_bg(COLOR_GRAY); break;
+                    case 101:term_set_bg(COLOR_BRIGHT_RED); break;
+                    case 102:term_set_bg(COLOR_BRIGHT_GREEN); break;
+                    case 103:term_set_bg(COLOR_BRIGHT_YELLOW); break;
+                    case 104:term_set_bg(COLOR_BRIGHT_BLUE); break;
+                    case 105:term_set_bg(COLOR_BRIGHT_MAGENTA); break;
+                    case 106:term_set_bg(COLOR_BRIGHT_CYAN); break;
+                    case 107:term_set_bg(COLOR_BRIGHT_WHITE); break;
+                    default:
+                        snprintf(debugmsg, MAX_DEBUG_LEN, "Unsupported SGR code: %d", csi_codes[i]);
+                        term_show_debug_message(debugmsg);
+                    }
+                }
+                state = ST_NORMAL;
+            }
+            else if (c == 'A') {
+                // Cursor up
+                y -= csi_codes[0];
+                if (y < 0) y = 0;
+                term_cursor_set(x, y);
+                state = ST_NORMAL;
+            }
+            else if (c == 'B') {
+                // Cursor down
+                y += csi_codes[0];
+                if (y >= TERM_HEIGHT) y = TERM_HEIGHT - 1;
+                term_cursor_set(x, y);
+                state = ST_NORMAL;
+            }
+            else if (c == 'C') {
+                // Cursor forward
+                x += csi_codes[0];
+                if (x >= TERM_WIDTH) x = TERM_WIDTH - 1;
+                term_cursor_set(x, y);
+                state = ST_NORMAL;
+            }
+            else if (c == 'D') {
+                x -= csi_codes[0];
+                if (x < 0) x = 0;
+                term_cursor_set(x, y);
+                state = ST_NORMAL;
+            }
+            else if (c == 'H') {
+                x = csi_codes[0] - 1;
+                y = csi_codes[1] - 1;
+                if (x < 0) x = 0;
+                if (x >= TERM_WIDTH) x= TERM_WIDTH - 1;
+                if (y < 0) y = 0;
+                if (y >= TERM_HEIGHT) y = TERM_HEIGHT - 1;
+                term_cursor_set(x, y);
+                state = ST_NORMAL;
+            }
+            else if (c == 'J') {
+                // erase screen
+                if (csi_codes[0] == 1) {
+                    for (; x < TERM_WIDTH; x++) {
+                        term_put_char(x, y, ' ');
+                    }
+                    for (y++; y < TERM_HEIGHT; y++) {
+                        for (x = 0; x < TERM_WIDTH; x++) {
+                            term_put_char(x, y, ' ');
+                        }
+                    }
+                    term_cursor_set(0, 0);
+                }
+                else {
+                    for (y = 0; y < TERM_HEIGHT; y++) {
+                        for (x = 0; x < TERM_WIDTH; x++) {
+                            term_put_char(x, y, ' ');
+                        }
+                    }
+                    term_cursor_set(0, 0);
+                }
+                state = ST_NORMAL;
+            }
+            else if (c == ';') {
+                // not end yet. continue
+            }
+            else {
+                snprintf(debugmsg, MAX_DEBUG_LEN, "Unsupported CSI seq: %c", c);
+                term_show_debug_message(debugmsg);
+                state = ST_NORMAL;
+            }
+        }
+    }
+}
+
+void term_process_string(char *str) {
+    char c;
+    while (c = *str++) {
+        term_process_char(c);
+    }
+}
+
+void term_update_screen() {
+    // This function compares front buffer and back buffer for the difference.
+    // It updates at most 1 char at a time and return.
+    static int x = 0, y = 0;
+
+    for (; y < TERM_HEIGHT; y++) {
+        for (; x < TERM_WIDTH; x++) {
+            char text = term_state_back.textmap[y][x];
+            char color = term_state_back.colormap[y][x];
+            char flag = term_state_back.flagmap[y][x];
+
+            if ((term_state_front.textmap[y][x] != text) ||
+                    (term_state_front.colormap[y][x] != color) ||
+                    (term_state_front.flagmap[y][x] != flag)) {
+                // Diff found
+                term_state_front.textmap[y][x] = text;
+                term_state_front.colormap[y][x] = color;
+                term_state_front.flagmap[y][x] = flag;
+                char fg = (uint8_t)color >> 4;
+                char bg = color & 0xf;
+                graph_put_char(x * 8, y * 16, text, fg, bg);
+                return;
+            }
+        }
+    }
+
+    if ((term_state_back.x != term_state_front.x) || 
+            (term_state_back.y != term_state_front.y)) {
+        term_clear_cursor();
+        term_state_front.x = term_state_back.x;
+        term_state_front.y = term_state_back.y;
+        term_disp_cursor();
+    }
+
+    x = 0;
+    y = 0;
+    term_state_dirty = false;
+}
+
+void term_main() {
+    char c;
+
+    struct repeating_timer timer;
+
+    add_repeating_timer_ms(-500, term_timer_callback, NULL, &timer);
+    gpio_init(25);
+    gpio_set_dir(25, GPIO_OUT);
+
+    term_process_string("EL-Terminal 0.01\r\n");
+    term_show_debug_message("This is a debug message");
+
+    while (1) {
+        // Process timing related work
+        if (timer_pending) {
+            timer_pending = false;
+            cursor_state = !cursor_state;
+            term_update_cursor();
+            gpio_put(25, cursor_state);
+        }
+        // Process all chars in the FIFO
+        while (serial_getc(&c)) {
+            term_process_char(c);
+        }
+        // Update up to one char on screen
+        if (term_state_dirty) {
+            term_update_screen();
+        }
+    }
+}

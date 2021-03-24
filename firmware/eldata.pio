@@ -1,0 +1,38 @@
+
+; UDATA SM handles UD0-3, PCLK, and VSYNC
+; PCLK is mapped to SIDE, VSYNC is mapped to SET, and UD0-3 are mapped to OUT
+.program el_udata
+.side_set 1
+    irq set 5 side 0
+    mov x, isr side 0 
+loop_first_line:
+    out pins, 4 side 1
+    jmp x-- loop_first_line side 0
+end_first_line:
+    set pins, 1 [6] side 0
+    set pins, 0 [9] side 0
+line_start:
+    irq set 5 side 0
+    mov x, isr side 0
+loop:
+    out pins, 4 side 1 ; Output 4 bit data
+    jmp x-- loop side 0 ; Loop until x hits 0, then wait for next line
+loop_end:
+    nop [15] side 0
+    jmp y-- line_start side 0 
+    ; end of frame, signal CPU
+    irq wait 1 side 0
+
+
+; LDATA SM handles LD0-3 and HSYNC
+; HSYNC is mapped to SET, and LD0-3 are mapped to OUT
+.program el_ldata
+    ; Signal UDATA SM to start outputting data
+    mov x, isr
+    wait irq 5
+loop:
+    out pins, 4
+    jmp x-- loop
+    ; toggle Hsync and signal Vsync SM
+    set pins, 1 [5]
+    set pins, 0 [10]

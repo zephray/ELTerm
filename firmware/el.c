@@ -7,15 +7,21 @@
 #include "hardware/dma.h"
 #include "hardware/irq.h"
 #include "eldata.pio.h"
+#include "graphics.h"
 #include "el.h"
 
 PIO el_pio = pio0;
-int el_udma_chan, el_ldma_chan;
+// Uses 3 DMA channels: The RP2040 DMA doesn't support list, so using chainning
+// to implement address wrapping around. 2 DMA channels are for 2 half-screens,
+// the last is for the half screen that crosses the boundary.
+int el_udma_chan, el_ldma_chan, el_wrap_chan;
 
-unsigned char framebuf_bp0[SCR_STRIDE * SCR_HEIGHT];
-unsigned char framebuf_bp1[SCR_STRIDE * SCR_HEIGHT];
+unsigned char framebuf_bp0[SCR_STRIDE * SCR_BUF_HEIGHT];
+unsigned char framebuf_bp1[SCR_STRIDE * SCR_BUF_HEIGHT];
 
 static int frame_state = 0;
+volatile int frame_scroll_lines = 0;
+volatile bool frame_sync = false;
 
 static void el_sm_load_reg(uint sm, enum pio_src_dest dst, uint32_t val) {
     pio_sm_put_blocking(el_pio, sm, val);
@@ -27,15 +33,90 @@ static void el_sm_load_isr(uint sm, uint32_t val) {
     el_sm_load_reg(sm, pio_isr, val);
 }
 
+static void el_dma_init_channel(uint chan, uint dreq, volatile uint32_t *dst) {
+    dma_channel_config c = dma_channel_get_default_config(chan);
+    channel_config_set_transfer_data_size(&c, DMA_SIZE_32);
+    channel_config_set_read_increment(&c, true);
+    channel_config_set_write_increment(&c, false);
+    channel_config_set_dreq(&c, dreq);
+
+    dma_channel_configure(chan, &c, dst, NULL, 0, false);
+}
+
+static void el_dma_config_for_udata(uint chan) {
+    el_dma_init_channel(chan, DREQ_PIO0_TX0 + EL_UDATA_SM, &el_pio->txf[EL_UDATA_SM]);
+}
+
+static void el_dma_config_for_ldata(uint chan) {
+    el_dma_init_channel(chan, DREQ_PIO0_TX0 + EL_LDATA_SM, &el_pio->txf[EL_LDATA_SM]);
+}
+
+static void el_dma_config_chainning(uint chan, uint chain_to) {
+    dma_channel_config c = dma_get_channel_config(chan);
+    channel_config_set_chain_to(&c, chain_to);
+    dma_channel_set_config(chan, &c, false);
+}
+
 static void el_pio_irq_handler() {
     gpio_put(22, 1);
 
     uint8_t *framebuf = frame_state ? framebuf_bp0 : framebuf_bp1;
     frame_state = !frame_state;
-    uint32_t *rdptr_ud = (uint32_t *)framebuf;
-    uint32_t *rdptr_ld = (uint32_t *)(framebuf + SCR_STRIDE * SCR_HEIGHT / 2);
-    dma_channel_set_read_addr(el_udma_chan, rdptr_ud, false);
-    dma_channel_set_read_addr(el_ldma_chan, rdptr_ld, false);
+
+    if (frame_scroll_lines >= SCR_BUF_HEIGHT) {
+        frame_scroll_lines = frame_scroll_lines % SCR_BUF_HEIGHT;
+    }
+
+    if (frame_scroll_lines <= SCR_ADD_HEIGHT) {
+        // Upper screen: 0-239 to 16-255, Lower screen: 240-479 to 256-495, 2 DMA used
+        uint32_t *rdptr_ud = (uint32_t *)(framebuf + SCR_STRIDE * frame_scroll_lines);
+        uint32_t *rdptr_ld = (uint32_t *)(framebuf + SCR_STRIDE * frame_scroll_lines + SCR_STRIDE * SCR_HEIGHT / 2);
+        dma_channel_set_read_addr(el_udma_chan, rdptr_ud, false);
+        dma_channel_set_read_addr(el_ldma_chan, rdptr_ld, false);
+        dma_channel_set_trans_count(el_udma_chan, SCR_STRIDE_WORDS * SCR_HEIGHT / 2, false);
+        dma_channel_set_trans_count(el_ldma_chan, SCR_STRIDE_WORDS * SCR_HEIGHT / 2, false);
+        el_dma_config_chainning(el_udma_chan, el_udma_chan);
+        el_dma_config_chainning(el_ldma_chan, el_ldma_chan);
+    }
+    else if (frame_scroll_lines < (240 + SCR_ADD_HEIGHT)) {
+        // 3 DMA used, upper screen uses 1 DMA, lower screen uses 2 DMA
+        uint32_t *rdptr_ud = (uint32_t *)(framebuf + SCR_STRIDE * frame_scroll_lines);
+        uint32_t *rdptr_ld = (uint32_t *)(framebuf + SCR_STRIDE * frame_scroll_lines + SCR_STRIDE * SCR_HEIGHT / 2);
+        el_dma_config_for_ldata(el_wrap_chan);
+        dma_channel_set_read_addr(el_udma_chan, rdptr_ud, false);
+        dma_channel_set_read_addr(el_ldma_chan, rdptr_ld, false);
+        dma_channel_set_read_addr(el_wrap_chan, framebuf, false);
+        dma_channel_set_trans_count(el_udma_chan, SCR_STRIDE_WORDS * SCR_HEIGHT / 2, false);
+        dma_channel_set_trans_count(el_ldma_chan, SCR_STRIDE_WORDS * (SCR_HEIGHT / 2 + SCR_ADD_HEIGHT - frame_scroll_lines), false);
+        dma_channel_set_trans_count(el_wrap_chan, SCR_STRIDE_WORDS * (frame_scroll_lines - SCR_ADD_HEIGHT), false);
+        el_dma_config_chainning(el_udma_chan, el_udma_chan);
+        el_dma_config_chainning(el_ldma_chan, el_wrap_chan);
+    }
+    else if (frame_scroll_lines == (240 + SCR_ADD_HEIGHT)) {
+        uint32_t *rdptr_ud = (uint32_t *)(framebuf + SCR_STRIDE * (SCR_HEIGHT / 2 + SCR_ADD_HEIGHT));
+        uint32_t *rdptr_ld = (uint32_t *)framebuf;
+        dma_channel_set_read_addr(el_udma_chan, rdptr_ud, false);
+        dma_channel_set_read_addr(el_ldma_chan, rdptr_ld, false);
+        dma_channel_set_trans_count(el_udma_chan, SCR_STRIDE_WORDS * SCR_HEIGHT / 2, false);
+        dma_channel_set_trans_count(el_ldma_chan, SCR_STRIDE_WORDS * SCR_HEIGHT / 2, false);
+        el_dma_config_chainning(el_udma_chan, el_udma_chan);
+        el_dma_config_chainning(el_ldma_chan, el_ldma_chan);
+    }
+    else {
+        // Upper screen: from 241-0 to 479-238, lower screen: from 1-240 to 239-478
+        // 3 DMA used, upper screen uses 2 DMA, lower screen uses 1 DMA
+        uint32_t *rdptr_ud = (uint32_t *)(framebuf + SCR_STRIDE * frame_scroll_lines);
+        uint32_t *rdptr_ld = (uint32_t *)(framebuf + SCR_STRIDE * (frame_scroll_lines - SCR_HEIGHT / 2 - SCR_ADD_HEIGHT));
+        el_dma_config_for_udata(el_wrap_chan);
+        dma_channel_set_read_addr(el_udma_chan, rdptr_ud, false);
+        dma_channel_set_read_addr(el_ldma_chan, rdptr_ld, false);
+        dma_channel_set_read_addr(el_wrap_chan, framebuf, false);
+        dma_channel_set_trans_count(el_udma_chan, SCR_STRIDE_WORDS * (SCR_BUF_HEIGHT - frame_scroll_lines), false);
+        dma_channel_set_trans_count(el_ldma_chan, SCR_STRIDE_WORDS * SCR_HEIGHT / 2, false);
+        dma_channel_set_trans_count(el_wrap_chan, SCR_STRIDE_WORDS * (frame_scroll_lines - SCR_HEIGHT / 2 - SCR_ADD_HEIGHT), false);
+        el_dma_config_chainning(el_udma_chan, el_wrap_chan);
+        el_dma_config_chainning(el_ldma_chan, el_ldma_chan);
+    }
 
     pio_sm_set_enabled(el_pio, EL_UDATA_SM, false);
     pio_sm_set_enabled(el_pio, EL_LDATA_SM, false);
@@ -59,6 +140,8 @@ static void el_pio_irq_handler() {
     // start SM
     pio_enable_sm_mask_in_sync(el_pio,
             (1u << EL_UDATA_SM) | (1u << EL_LDATA_SM));
+
+    frame_sync = 1;
 
     gpio_put(22, 0);
 }
@@ -111,22 +194,13 @@ static void el_sm_init() {
 
 static void el_dma_init() {
     el_udma_chan = dma_claim_unused_channel(true);
-    dma_channel_config cu = dma_channel_get_default_config(el_udma_chan);
-    channel_config_set_transfer_data_size(&cu, DMA_SIZE_32);
-    channel_config_set_read_increment(&cu, true);
-    channel_config_set_write_increment(&cu, false);
-    channel_config_set_dreq(&cu, DREQ_PIO0_TX0 + EL_UDATA_SM);
-
-    dma_channel_configure(el_udma_chan, &cu, &el_pio->txf[EL_UDATA_SM], NULL, SCR_STRIDE_WORDS * SCR_REFRESH_LINES, false);
+    el_dma_config_for_udata(el_udma_chan);
 
     el_ldma_chan = dma_claim_unused_channel(true);
-    dma_channel_config cl = dma_channel_get_default_config(el_ldma_chan);
-    channel_config_set_transfer_data_size(&cl, DMA_SIZE_32);
-    channel_config_set_read_increment(&cl, true);
-    channel_config_set_write_increment(&cl, false);
-    channel_config_set_dreq(&cl, DREQ_PIO0_TX0 + EL_LDATA_SM);
+    el_dma_config_for_ldata(el_ldma_chan);
 
-    dma_channel_configure(el_ldma_chan, &cl, &el_pio->txf[EL_LDATA_SM], NULL, SCR_STRIDE_WORDS * SCR_REFRESH_LINES, false);
+    el_wrap_chan = dma_claim_unused_channel(true);
+    // leave unused for now, will be configured once need to be used.
 }
 
 void el_start() {

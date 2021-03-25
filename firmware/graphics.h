@@ -21,7 +21,14 @@
 //
 #pragma once
 
+#define FLAG_BOLD (0x80)
+#define FLAG_ITALIC (0x40)
+#define FLAG_UNDERLINE (0x20)
+#define FLAG_STHROUGH (0x10)
+#define FLAG_SLOWBLINK (0x08)
+#define FLAG_FASTBLINK (0x04)
+
 void graph_put_pixel(int x, int y, int c);
 void graph_fill_rect(int x1, int y1, int x2, int y2, int c);
-void graph_put_char(int x, int y, char c, char cl_fg, char cl_bg);
+void graph_put_char(int x, int y, char c, char cl_fg, char cl_bg, char flags);
 void graph_put_char_small(int x, int y, char c, char cl_fg, char cl_bg);

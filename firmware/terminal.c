@@ -21,20 +21,23 @@
 //
 #include <stdio.h>
 #include "pico/stdlib.h"
+#include "el.h"
 #include "graphics.h"
 #include "terminal.h"
 #include "serial.h"
 
+// Additional line for scrolling
 #define TERM_WIDTH 80
 #define TERM_HEIGHT 30
+#define TERM_BUF_HEIGHT (TERM_HEIGHT+1)
 #define MAX_DEBUG_LEN 107
 char debugmsg[MAX_DEBUG_LEN];
 
 typedef struct {
-    char textmap[TERM_HEIGHT][TERM_WIDTH];
-    char flagmap[TERM_HEIGHT][TERM_WIDTH];
-    char colormap[TERM_HEIGHT][TERM_WIDTH];
-    int x, y;
+    char textmap[TERM_BUF_HEIGHT][TERM_WIDTH];
+    char flagmap[TERM_BUF_HEIGHT][TERM_WIDTH];
+    char colormap[TERM_BUF_HEIGHT][TERM_WIDTH];
+    int x, y, y_offset;
 } TERM_STATE;
 
 typedef enum {
@@ -43,16 +46,9 @@ typedef enum {
     ST_CSI_SEQ
 } PARSER_STATE;
 
-TERM_STATE term_state_back;
-TERM_STATE term_state_front;
-bool term_state_dirty;
-
-#define FLAG_BOLD (0x80)
-#define FLAG_ITALIC (0x40)
-#define FLAG_UNDERLINE (0x20)
-#define FLAG_STHROUGH (0x10)
-#define FLAG_SLOWBLINK (0x08)
-#define FLAG_FASTBLINK (0x04)
+static TERM_STATE term_state_back;
+static TERM_STATE term_state_front;
+static bool term_state_dirty = false;
 
 #define COLOR_BLACK (0)
 #define COLOR_RED (1)
@@ -73,6 +69,8 @@ bool term_state_dirty;
 
 #define DEFAULT_COLOR ((COLOR_WHITE << 4) | (COLOR_BLACK))
 
+#define MAX_UPDATE (80 * 30)
+
 static bool cursor_state = false;
 static volatile bool timer_pending = false;
 static char current_color = DEFAULT_COLOR;
@@ -83,7 +81,15 @@ void term_scroll() {
     term_state_back.y++;
     if (term_state_back.y >= TERM_HEIGHT) {
         // Scroll
-        term_state_back.y = 0;
+        term_state_back.y --;
+        term_state_back.y_offset ++;
+        if (term_state_back.y_offset >= TERM_BUF_HEIGHT)
+            term_state_back.y_offset -= TERM_BUF_HEIGHT;
+        int cy = term_state_back.y + term_state_back.y_offset;
+        if (cy >= TERM_BUF_HEIGHT) cy -= TERM_BUF_HEIGHT;
+        for (int x = 0; x < TERM_WIDTH; x++) {
+            term_state_back.textmap[cy][x] = ' ';
+        }
     }
     term_state_dirty = true;
 }
@@ -118,22 +124,20 @@ void term_cursor_set(int x, int y) {
 
 void term_clear_cursor() {
     int x = term_state_front.x;
-    int y = term_state_front.y;
+    int y = term_state_front.y + term_state_front.y_offset;
+    if (y >= TERM_BUF_HEIGHT) y -= TERM_BUF_HEIGHT;
     char text = term_state_front.textmap[y][x];
     char color = term_state_front.colormap[y][x];
     char fg = (uint8_t)color >> 4;
     char bg = color & 0xf;
-    if (text != ' ') {
-        graph_put_char(x * 8, y * 16, text, fg, bg);
-    }
-    else {
-        graph_fill_rect(x * 8, y * 16, (x + 1) * 8, (y + 1) * 16, bg);
-    }
+    char flag = term_state_front.flagmap[y][x];
+    graph_put_char(x * 8, y * 16, text, fg, bg, flag);
 }
 
 void term_disp_cursor() {
     int x = term_state_front.x;
-    int y = term_state_front.y;
+    int y = term_state_front.y + term_state_front.y_offset;
+    if (y >= TERM_BUF_HEIGHT) y -= TERM_BUF_HEIGHT;
     graph_fill_rect(x * 8, y * 16, (x + 1) * 8, (y + 1) * 16, COLOR_WHITE);
 }
 
@@ -162,9 +166,11 @@ void term_show_debug_message(char *str) {
 }
 
 static void term_put_char(int x, int y, char c) {
-    term_state_back.textmap[y][x] = c;
-    term_state_back.flagmap[y][x] = current_flag;
-    term_state_back.colormap[y][x] = current_color;
+    int ay = y + term_state_back.y_offset;
+    if (ay >= TERM_BUF_HEIGHT) ay -= TERM_BUF_HEIGHT;
+    term_state_back.textmap[ay][x] = c;
+    term_state_back.flagmap[ay][x] = current_flag;
+    term_state_back.colormap[ay][x] = current_color;
     term_state_dirty = true;
 }
 
@@ -188,7 +194,6 @@ void term_process_char(char c) {
     int x = term_state_back.x;
     int y = term_state_back.y;
 
-    term_clear_cursor();
     if (state == ST_NORMAL) {
         if ((c == 0x08) || (c == 0x7f)) {
             // BS
@@ -197,7 +202,7 @@ void term_process_char(char c) {
         else if (c == 0x0d) {
             // CR
             term_state_back.x = 0;
-            term_scroll();
+            //term_scroll();
         }
         else if ((c == 0x0a) || (c == 0x0b) || (c == 0x0c)) {
             // LF
@@ -402,11 +407,11 @@ void term_process_string(char *str) {
 
 void term_update_screen() {
     // This function compares front buffer and back buffer for the difference.
-    // It updates at most 1 char at a time and return.
-    static int x = 0, y = 0;
+    // It updates at most MAX_UPDATE char at a time and return.
+    int update_count = 0;
 
-    for (; y < TERM_HEIGHT; y++) {
-        for (; x < TERM_WIDTH; x++) {
+    for (int y = 0; y < TERM_BUF_HEIGHT; y++) {
+        for (int x = 0; x < TERM_WIDTH; x++) {
             char text = term_state_back.textmap[y][x];
             char color = term_state_back.colormap[y][x];
             char flag = term_state_back.flagmap[y][x];
@@ -420,8 +425,10 @@ void term_update_screen() {
                 term_state_front.flagmap[y][x] = flag;
                 char fg = (uint8_t)color >> 4;
                 char bg = color & 0xf;
-                graph_put_char(x * 8, y * 16, text, fg, bg);
-                return;
+                graph_put_char(x * 8, y * 16, text, fg, bg, flag);
+                update_count ++;
+                if (update_count > MAX_UPDATE)
+                    return;
             }
         }
     }
@@ -434,8 +441,13 @@ void term_update_screen() {
         term_disp_cursor();
     }
 
-    x = 0;
-    y = 0;
+    if (term_state_back.y_offset != term_state_front.y_offset) {
+        term_clear_cursor();
+        term_state_front.y_offset = term_state_back.y_offset;
+        frame_scroll_lines = term_state_front.y_offset * 16;
+        term_disp_cursor();
+    }
+
     term_state_dirty = false;
 }
 
@@ -448,8 +460,44 @@ void term_main() {
     gpio_init(25);
     gpio_set_dir(25, GPIO_OUT);
 
-    term_process_string("EL-Terminal 0.01\r\n");
-    term_show_debug_message("This is a debug message");
+    memset(&term_state_back, 0, sizeof(term_state_back));
+    memset(&term_state_front, 0, sizeof(term_state_front));
+
+    term_process_string("ELTerm 0.01\r\n");
+
+#if 0
+    uint64_t timediff = time_us_64();
+    char fg = 1;
+    char bg = COLOR_BLACK;
+    for (int y = 0; y < 30; y++) {
+        for (int x = 0; x < 80; x++) {
+            graph_put_char(x * 8, y * 16, x+ 20, fg, bg);
+        }
+        fg++;
+        if (fg==bg) fg++;
+        if (fg==5) fg=7;
+        if (fg==8) {
+            fg = 0;
+            bg++;
+            if (bg==5) bg=7;
+            if (bg==8) bg=0;
+        };
+    }
+    for (int c = 0; c < 6; c++) {
+        for (int y = 0; y < 30; y++) {
+            for (int x = 0; x < 80; x++) {
+                graph_fill_rect(x * 8, y * 16, (x + 1) * 8, (y + 1) * 16, c);
+                //graph_put_char(x * 8, y * 16, x+ 20, fg, bg);
+            }
+        }
+        //graph_fill_rect(0, 0, 640, 480, y);
+    }
+    timediff = time_us_64() - timediff;
+    snprintf(debugmsg, MAX_DEBUG_LEN, "Rendered in %lld us", timediff);
+    term_show_debug_message(debugmsg);
+
+    while(1);
+#endif
 
     while (1) {
         // Process timing related work

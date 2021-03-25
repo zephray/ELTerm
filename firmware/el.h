@@ -44,13 +44,18 @@
 
 #define SCR_WIDTH (640)
 #define SCR_HEIGHT (480)
+// Additional line for smooth scrolling
+#define SCR_ADD_HEIGHT (16)
+#define SCR_BUF_HEIGHT (SCR_HEIGHT + SCR_ADD_HEIGHT)
 #define SCR_LINE_TRANSFERS (SCR_WIDTH / 4)
 #define SCR_STRIDE (SCR_WIDTH / 8)
 #define SCR_STRIDE_WORDS (SCR_WIDTH / 32)
 #define SCR_REFRESH_LINES (SCR_HEIGHT / 2)
 
 // Public variables and functions
-extern unsigned char framebuf_bp0[SCR_STRIDE * SCR_HEIGHT];
-extern unsigned char framebuf_bp1[SCR_STRIDE * SCR_HEIGHT];
+extern unsigned char framebuf_bp0[SCR_STRIDE * SCR_BUF_HEIGHT];
+extern unsigned char framebuf_bp1[SCR_STRIDE * SCR_BUF_HEIGHT];
+extern volatile int frame_scroll_lines;
+extern volatile bool frame_sync;
 
 void el_start();

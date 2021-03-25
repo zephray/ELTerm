@@ -12,16 +12,16 @@ set(PICO_SDK_PATH "/home/pi/Documents/pico-sdk")
 # Pull in Raspberry Pi Pico SDK (must be before project)
 include(pico_sdk_import.cmake)
 
-project(el-demo C CXX ASM)
+project(elterm C CXX ASM)
 
 # Initialise the Raspberry Pi Pico SDK
 pico_sdk_init()
 
-add_executable(el-demo)
+add_executable(elterm)
 
-pico_generate_pio_header(el-demo ${CMAKE_CURRENT_LIST_DIR}/eldata.pio)
+pico_generate_pio_header(elterm ${CMAKE_CURRENT_LIST_DIR}/eldata.pio)
 
-target_sources(el-demo PRIVATE
+target_sources(elterm PRIVATE
         main.c
         el.c
         graphics.c
@@ -29,19 +29,19 @@ target_sources(el-demo PRIVATE
         serial.c
         )
 
-pico_set_program_name(el-demo "el-demo")
-pico_set_program_version(el-demo "0.1")
+pico_set_program_name(elterm "elterm")
+pico_set_program_version(elterm "0.1")
 
-pico_enable_stdio_uart(el-demo 0)
-pico_enable_stdio_usb(el-demo 0)
+pico_enable_stdio_uart(elterm 0)
+pico_enable_stdio_usb(elterm 0)
 
 # Add the standard library to the build
-target_link_libraries(el-demo pico_stdlib hardware_dma)
+target_link_libraries(elterm pico_stdlib hardware_dma)
 
 # Add any user requested libraries
-target_link_libraries(el-demo
+target_link_libraries(elterm
         hardware_pio
         )
 
-pico_add_extra_outputs(el-demo)
+pico_add_extra_outputs(elterm)
 

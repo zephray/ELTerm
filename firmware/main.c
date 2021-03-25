@@ -31,7 +31,7 @@ int main()
     stdio_init_all();
     el_start();
     serial_init();
-    terminal_main();
+    term_main();
 
     return 0;
 }

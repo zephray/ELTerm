@@ -21,16 +21,25 @@
 //
 #pragma once
 
-#define UART_ID uart0
+
 #define BAUD_RATE 115200
 #define DATA_BITS 8
 #define STOP_BITS 1
 #define PARITY    UART_PARITY_NONE
 
+#if 0
+#define UART_ID uart0
 #define UART_TX_PIN 0
 #define UART_RX_PIN 1
+#else
+#define UART_ID uart1
+#define UART_TX_PIN 20
+#define UART_RX_PIN 21
+#endif
 
 #define SERIAL_RIGNBUF_SIZE (1024)
 
 void serial_init();
 bool serial_getc(char *c);
+void serial_putc(char c);
+void serial_puts(char *s);

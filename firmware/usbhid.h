@@ -1,5 +1,6 @@
 //
 // Copyright 2021 Wenting Zhang <zephray@outlook.com>
+// Copyright 2019 Ha Thach (tinyusb.org)
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -19,22 +20,6 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 //
-#include <stdio.h>
-#include "pico/stdlib.h"
-#include "el.h"
-#include "graphics.h"
-#include "terminal.h"
-#include "serial.h"
-#include "usbhid.h"
 
-int main()
-{
-    board_init();
-    stdio_init_all();
-    el_start();
-    serial_init();
-    usbhid_init();
-    term_main();
-
-    return 0;
-}
+void usbhid_init();
+void usbhid_polling();

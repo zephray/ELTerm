@@ -20,16 +20,19 @@
 // SOFTWARE.
 //
 #include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
 #include "pico/stdlib.h"
 #include "el.h"
 #include "graphics.h"
 #include "terminal.h"
 #include "serial.h"
+#include "usbhid.h"
 
 // Additional line for scrolling
 #define TERM_WIDTH 80
 #define TERM_HEIGHT 30
-#define TERM_BUF_HEIGHT (TERM_HEIGHT+1)
+#define TERM_BUF_HEIGHT (TERM_HEIGHT+2)
 #define MAX_DEBUG_LEN 107
 char debugmsg[MAX_DEBUG_LEN];
 
@@ -43,7 +46,10 @@ typedef struct {
 typedef enum {
     ST_NORMAL,
     ST_ANSI_ESCAPE,
-    ST_CSI_SEQ
+    ST_CSI_SEQ,
+    ST_LSC_SEQ,
+    ST_G0S_SEQ,
+    ST_G1S_SEQ
 } PARSER_STATE;
 
 static TERM_STATE term_state_back;
@@ -69,12 +75,17 @@ static bool term_state_dirty = false;
 
 #define DEFAULT_COLOR ((COLOR_WHITE << 4) | (COLOR_BLACK))
 
-#define MAX_UPDATE (80 * 30)
+#define MAX_UPDATE (80 * 10)
 
 static bool cursor_state = false;
 static volatile bool timer_pending = false;
 static char current_color = DEFAULT_COLOR;
 static char current_flag = 0;
+// Saved cursor for DECSC and DECRC
+static int saved_x, saved_y;
+static char saved_color, saved_flag;
+// Modes
+static bool mode_auto_warp = true;
 
 void term_scroll() {
     // TODO
@@ -110,8 +121,13 @@ void term_cursor_backward() {
 void term_cursor_forward() {
     term_state_back.x++;
     if (term_state_back.x >= TERM_WIDTH) {
-        term_state_back.x = 0;
-        term_scroll();
+        if (mode_auto_warp) {
+            term_state_back.x = 0;
+            term_scroll();
+        }
+        else {
+            term_state_back.x = TERM_WIDTH - 1;
+        }
     }
     term_state_dirty = true;
 }
@@ -156,13 +172,32 @@ bool term_timer_callback(struct repeating_timer *t) {
 }
 
 void term_show_debug_message(char *str) {
-    char c;
+    /*char c;
     int x = 1, y = 471;
     graph_fill_rect(0, 471, 640, 480, COLOR_WHITE);
     while (c = *str++) {
         graph_put_char_small(x, y, c, COLOR_BLACK, COLOR_WHITE);
         x += 6;
+    }*/
+    puts(str);
+}
+
+static void term_dec_modeset(int mode, bool enable) {
+    if (mode == 7) {
+        mode_auto_warp = enable;
     }
+    else if (mode == 2004) {
+        // Bracketed paste mode. Ignore
+    }
+    else {
+        snprintf(debugmsg, MAX_DEBUG_LEN, "Unsupported DEC mode: %d", mode);
+        term_show_debug_message(debugmsg);
+    }
+}
+
+static void term_modeset(int mode, bool enable) {
+        snprintf(debugmsg, MAX_DEBUG_LEN, "Unsupported mode: %d", mode);
+        term_show_debug_message(debugmsg);
 }
 
 static void term_put_char(int x, int y, char c) {
@@ -184,6 +219,43 @@ static void term_set_bg(char bg) {
     current_color |= bg;
 }
 
+static void term_cursor_down(int lines) {
+    int x = term_state_back.x;
+    int y = term_state_back.y;
+    y += lines;
+    if (y >= TERM_HEIGHT) y = TERM_HEIGHT - 1;
+    term_cursor_set(x, y);
+}
+
+static void term_cursor_up(int lines) {
+    int x = term_state_back.x;
+    int y = term_state_back.y;
+    y -= lines;
+    if (y < 0) y = 0;
+    term_cursor_set(x, y);
+}
+
+static void term_report_dev_attributes() {
+    serial_puts("\e[?1;0c");
+}
+
+static void term_report_cursor() {
+    char str[20];
+    snprintf(str, 20, "\e[%d;%dR", term_state_back.y + 1, term_state_back.x + 1);
+    serial_puts(str);
+}
+
+static void term_reset() {
+    saved_x = 0;
+    saved_y = 0;
+    saved_color = DEFAULT_COLOR;
+    saved_flag = 0;
+    current_color = DEFAULT_COLOR;
+    current_flag = 0;
+    mode_auto_warp = true;
+    memset(&term_state_back, 0, sizeof(term_state_back));
+}
+
 void term_process_char(char c) {
     // States
     static char csi[5];
@@ -191,6 +263,7 @@ void term_process_char(char c) {
     static int arg_counter = 0;
     static int chr_counter = 0;
     static PARSER_STATE state = ST_NORMAL;
+    static bool dec_set = false;
     int x = term_state_back.x;
     int y = term_state_back.y;
 
@@ -201,7 +274,7 @@ void term_process_char(char c) {
         }
         else if (c == 0x0d) {
             // CR
-            term_state_back.x = 0;
+            term_cursor_set(0, term_state_back.y);
             //term_scroll();
         }
         else if ((c == 0x0a) || (c == 0x0b) || (c == 0x0c)) {
@@ -218,6 +291,9 @@ void term_process_char(char c) {
                 term_scroll();
             }
         }
+        else if (c == 0x07) {
+            // Bell
+        }
         else if (c == 0x1b) {
             state = ST_ANSI_ESCAPE;
         }
@@ -229,11 +305,62 @@ void term_process_char(char c) {
     else if (state == ST_ANSI_ESCAPE) {
         if (c == '[') {
             state = ST_CSI_SEQ;
+            dec_set = false;
             arg_counter = 0;
             chr_counter = 0;
         }
+        else if (c == '#') {
+            state = ST_LSC_SEQ;
+        }
+        else if (c == '(') {
+            state = ST_G0S_SEQ;
+        }
+        else if (c == ')') {
+            state = ST_G1S_SEQ;
+        }
+        else if (c == '7') {
+            // DECSC: Save Cursor
+            saved_x = term_state_back.x;
+            saved_y = term_state_back.y;
+            saved_color = current_color;
+            saved_flag = current_flag;
+            state = ST_NORMAL;
+        }
+        else if (c == '8') {
+            // DECRC: Restore Cursor
+            term_state_back.x = saved_x;
+            term_state_back.y = saved_y;
+            current_color = saved_color;
+            current_flag = saved_flag;
+            state = ST_NORMAL;
+        }
+        else if (c == 'D') {
+            // IND: Index
+            term_cursor_down(1);
+            state = ST_NORMAL;
+        }
+        else if (c == 'E') {
+            // NEL: Next Line
+            term_scroll();
+            state = ST_NORMAL;
+        }
+        else if (c == 'M') {
+            // RI: Reverse Index
+            term_cursor_up(1);
+            state = ST_NORMAL;
+        }
+        else if (c == 'Z') {
+            // DECID: Identify
+            term_report_dev_attributes();
+            state = ST_NORMAL;
+        }
+        else if (c == 'c') {
+            // RIS: Reset to Initial State
+            term_reset();
+            state = ST_NORMAL;
+        }
         else {
-            snprintf(debugmsg, MAX_DEBUG_LEN, "Unsupported escape sequence: %c", c);
+            snprintf(debugmsg, MAX_DEBUG_LEN, "Unsupported escape sequence: %c (%d)", c, c);
             term_show_debug_message(debugmsg);
             state = ST_NORMAL;
         }
@@ -248,19 +375,22 @@ void term_process_char(char c) {
         }
         else {
             csi[chr_counter] = '\0';
-            if (chr_counter == 0) {
-                csi_codes[arg_counter++] = 1;
-            }
-            else {
+            if (chr_counter != 0) {
                 csi_codes[arg_counter++] = atoi(csi);
+                chr_counter = 0;
             }
             if (arg_counter > 4) {
                 term_show_debug_message("Too many arguments in one CSI sequence");
                 state = ST_NORMAL;
                 return;
             }
+            
             if (c == 'm') {
                 // SGR sequcne
+                if (arg_counter == 0) {
+                    csi_codes[0] = 0;
+                    arg_counter = 1;
+                }
                 for (int i = 0; i < arg_counter; i++) {
                     switch (csi_codes[i]) {
                     case 0: // Reset
@@ -275,6 +405,8 @@ void term_process_char(char c) {
                         current_flag |= FLAG_UNDERLINE; break;
                     case 5: // Slow blink
                         current_flag |= FLAG_SLOWBLINK; break;
+                    case 7:
+                        current_flag |= FLAG_INVERT; break;
                     case 9: // Croseed out
                         current_flag |= FLAG_STHROUGH; break;
                     case 22: // Bold off
@@ -287,6 +419,8 @@ void term_process_char(char c) {
                         current_flag &= ~FLAG_SLOWBLINK; break;
                     case 26: // Crossed out off
                         current_flag &= ~FLAG_STHROUGH; break;
+                    case 27:
+                        current_flag &= ~FLAG_INVERT; break;
                     case 30: term_set_fg(COLOR_BLACK); break;
                     case 31: term_set_fg(COLOR_RED); break;
                     case 32: term_set_fg(COLOR_GREEN); break;
@@ -326,36 +460,58 @@ void term_process_char(char c) {
                 }
                 state = ST_NORMAL;
             }
+            else if (c == '?') {
+                dec_set = true;
+            }
             else if (c == 'A') {
-                // Cursor up
-                y -= csi_codes[0];
-                if (y < 0) y = 0;
-                term_cursor_set(x, y);
+                // CUU: Cursor Up
+                if (arg_counter == 0) csi_codes[0] = 1;
+                term_cursor_up(csi_codes[0]);
                 state = ST_NORMAL;
             }
             else if (c == 'B') {
-                // Cursor down
-                y += csi_codes[0];
-                if (y >= TERM_HEIGHT) y = TERM_HEIGHT - 1;
-                term_cursor_set(x, y);
+                // CUD: Cursor Down
+                if (arg_counter == 0) csi_codes[0] = 1;
+                term_cursor_down(csi_codes[0]);
                 state = ST_NORMAL;
             }
             else if (c == 'C') {
-                // Cursor forward
+                // CUF: Cursor Forward
+                if (arg_counter == 0) csi_codes[0] = 1;
                 x += csi_codes[0];
                 if (x >= TERM_WIDTH) x = TERM_WIDTH - 1;
                 term_cursor_set(x, y);
                 state = ST_NORMAL;
             }
             else if (c == 'D') {
+                // CUB: Cursor Back
+                if (arg_counter == 0) csi_codes[0] = 1;
                 x -= csi_codes[0];
                 if (x < 0) x = 0;
                 term_cursor_set(x, y);
                 state = ST_NORMAL;
             }
-            else if (c == 'H') {
+            /*else if (c == 'G') {
+                if (arg_counter == 0) csi_codes[0] = 1;
                 x = csi_codes[0] - 1;
-                y = csi_codes[1] - 1;
+                term_cursor_set(x, y);
+                state = ST_NORMAL;
+            }
+            else if (c == 'd') {
+                if (arg_counter == 0) csi_codes[0] = 1;
+                y = csi_codes[0] - 1;
+                term_cursor_set(x, y);
+                state = ST_NORMAL;
+            }*/
+            else if ((c == 'H') || (c == 'f')) {
+                // CUP: Cursor Position
+                // HVP: Horizontal Vertical Position
+                if (arg_counter < 2)
+                    csi_codes[1] = 1;
+                if (arg_counter < 1)
+                    csi_codes[0] = 1;
+                y = csi_codes[0] - 1;
+                x = csi_codes[1] - 1;
                 if (x < 0) x = 0;
                 if (x >= TERM_WIDTH) x= TERM_WIDTH - 1;
                 if (y < 0) y = 0;
@@ -363,18 +519,48 @@ void term_process_char(char c) {
                 term_cursor_set(x, y);
                 state = ST_NORMAL;
             }
-            else if (c == 'J') {
-                // erase screen
-                if (csi_codes[0] == 1) {
+            else if (c == 'K') {
+                // EL: Erase in Line
+                if (arg_counter == 0) csi_codes[0] = 0;
+                if (csi_codes[0] == 0) {
                     for (; x < TERM_WIDTH; x++) {
                         term_put_char(x, y, ' ');
                     }
-                    for (y++; y < TERM_HEIGHT; y++) {
-                        for (x = 0; x < TERM_WIDTH; x++) {
-                            term_put_char(x, y, ' ');
+                }
+                else if (csi_codes[0] == 1) {
+                    for (int xx = 0; xx <= x; xx++) {
+                        term_put_char(x, y, ' ');
+                    }
+                }
+                else {
+                    for (x = 0; x < TERM_WIDTH; x++) {
+                        term_put_char(x, y, ' ');
+                    }
+                }
+                state = ST_NORMAL;
+            }
+            else if (c == 'J') {
+                // ED: Erase in Display
+                if (arg_counter == 0) csi_codes[0] = 0;
+                if (csi_codes[0] == 0) {
+                    for (int xx = x; xx < TERM_WIDTH; xx++) {
+                        term_put_char(xx, y, ' ');
+                    }
+                    for (int yy = y + 1; yy < TERM_HEIGHT; yy++) {
+                        for (int xx = 0; xx < TERM_WIDTH; xx++) {
+                            term_put_char(xx, yy, ' ');
                         }
                     }
-                    term_cursor_set(0, 0);
+                }
+                else if (csi_codes[0] == 1) {
+                    for (int yy = 0; yy < y; yy++) {
+                        for (int xx = 0; xx < TERM_WIDTH; xx++) {
+                            term_put_char(xx, yy, ' ');
+                        }
+                    }
+                    for (int xx = 0; xx <= x; xx++) {
+                        term_put_char(xx, y, ' ');
+                    }
                 }
                 else {
                     for (y = 0; y < TERM_HEIGHT; y++) {
@@ -382,7 +568,101 @@ void term_process_char(char c) {
                             term_put_char(x, y, ' ');
                         }
                     }
-                    term_cursor_set(0, 0);
+                }
+                state = ST_NORMAL;
+            }
+            else if (c == 'n') {
+                // DSR: Device Status Report
+                if (csi_codes[0] == 5) {
+                    serial_puts("\e[0n"); // Ready
+                }
+                else if (csi_codes[0] == 6) {
+                    term_report_cursor();
+                }
+                state = ST_NORMAL;
+            }
+            else if (c == 'c') {
+                // DA: Device Attributes
+                term_report_dev_attributes();
+                state = ST_NORMAL;
+            }
+            else if (c == '@') {
+                // ICH: Insert Character
+                if (arg_counter == 1) {
+                    int shift = csi_codes[0];
+                    for (int xx = TERM_WIDTH; xx >= x + shift; xx++) {
+                        term_state_back.textmap[y][xx] = term_state_back.textmap[y][xx - shift];
+                        term_state_back.colormap[y][xx] = term_state_back.colormap[y][xx - shift];
+                        term_state_back.flagmap[y][xx] = term_state_back.flagmap[y][xx - shift];
+                    }
+                    for (int xx = x; xx < x + shift; xx++) {
+                        if (xx >= TERM_WIDTH)
+                            break;
+                        term_state_back.textmap[y][xx] = ' ';
+                        term_state_back.colormap[y][xx] = current_color;
+                        term_state_back.flagmap[y][xx] = current_flag;
+                    }
+                    term_state_dirty = true;
+                }
+                state = ST_NORMAL;
+            }
+            else if (c == 'P') {
+                // DCH: Delete Character
+                if (arg_counter == 1) {
+                    int shift = csi_codes[0];
+                    if (shift > (TERM_WIDTH - x))
+                        shift = TERM_WIDTH - x;
+                    for (int xx = x; xx < (TERM_WIDTH - shift); xx++) {
+                        term_state_back.textmap[y][xx] = term_state_back.textmap[y][xx + shift];
+                        term_state_back.colormap[y][xx] = term_state_back.colormap[y][xx + shift];
+                        term_state_back.flagmap[y][xx] = term_state_back.flagmap[y][xx + shift];
+                    }
+                    for (int xx = TERM_WIDTH - shift; xx < TERM_WIDTH; xx++) {
+                        term_state_back.textmap[y][xx] = ' ';
+                        term_state_back.colormap[y][xx] = current_color;
+                        term_state_back.flagmap[y][xx] = current_flag;
+                    }
+                    term_state_dirty = true;
+                }
+                state = ST_NORMAL;
+            }
+            else if (c == 'X') {
+                // ECH: Erase Character
+                if (arg_counter == 1) {
+                    int shift = csi_codes[0];
+                    if (shift > (TERM_WIDTH - x))
+                        shift = TERM_WIDTH - x;
+                    for (int xx = x; xx < x + shift; xx++) {
+                        term_state_back.textmap[y][xx] = ' ';
+                        term_state_back.colormap[y][xx] = current_color;
+                        term_state_back.flagmap[y][xx] = current_flag;
+                    }
+                    term_state_dirty = true;
+                }
+                state = ST_NORMAL;
+            }
+            else if (c == 'r') {
+                // DECSTBM: Set Scrolling Region
+                // Scrolling is not supported, ignore
+                state = ST_NORMAL;
+            }
+            else if (c == 'h') {
+                // Mode setting
+                for (int i = 0; i < arg_counter; i++) {
+                    if (dec_set)
+                        term_dec_modeset(csi_codes[i], true);
+                    else
+                        term_modeset(csi_codes[i], true);
+                }
+                state = ST_NORMAL;
+            }
+            else if (c == 'l') {
+                // Mode setting
+                for (int i = 0; i < arg_counter; i++) {
+                    if (dec_set)
+                        term_dec_modeset(csi_codes[i], false);
+                    else
+                        term_modeset(csi_codes[i], false);
                 }
                 state = ST_NORMAL;
             }
@@ -390,11 +670,31 @@ void term_process_char(char c) {
                 // not end yet. continue
             }
             else {
-                snprintf(debugmsg, MAX_DEBUG_LEN, "Unsupported CSI seq: %c", c);
+                snprintf(debugmsg, MAX_DEBUG_LEN, "Unsupported CSI seq: %c (%d)", c, c);
                 term_show_debug_message(debugmsg);
                 state = ST_NORMAL;
             }
+
+            /*if (state == ST_NORMAL) {
+                printf("CSI");
+                for (int i = 0; i < arg_counter; i++) {
+                    printf("%d ", csi_codes[i]);
+                }
+                printf("%c\n", c);
+            }*/
         }
+    }
+    else if (state == ST_LSC_SEQ) {
+        // Silently ignore LSC sequence
+        state = ST_NORMAL;
+    }
+    else if (state == ST_G0S_SEQ) {
+        // Silently ignore G0 SCS
+        state = ST_NORMAL;
+    }
+    else if (state == ST_G1S_SEQ) {
+        // Silently ignore G1 SCS
+        state = ST_NORMAL;
     }
 }
 
@@ -444,8 +744,7 @@ void term_update_screen() {
     if (term_state_back.y_offset != term_state_front.y_offset) {
         term_clear_cursor();
         term_state_front.y_offset = term_state_back.y_offset;
-        frame_scroll_lines = term_state_front.y_offset * 16;
-        term_disp_cursor();
+        //frame_scroll_lines = term_state_front.y_offset * 16;
     }
 
     term_state_dirty = false;
@@ -515,5 +814,35 @@ void term_main() {
         if (term_state_dirty) {
             term_update_screen();
         }
+        if (frame_sync) {
+            frame_sync = false;
+            // Smooth scrolling
+            uint32_t cur_scroll_lines = frame_scroll_lines;
+            uint32_t new_scroll_lines;
+            uint32_t target_scroll_lines = term_state_front.y_offset * 16;
+            if (cur_scroll_lines != target_scroll_lines) {
+                if (cur_scroll_lines < target_scroll_lines) {
+                    if (cur_scroll_lines < (target_scroll_lines - 16)) {
+                        new_scroll_lines = target_scroll_lines - 16;
+                    }
+                    else {
+                        new_scroll_lines = frame_scroll_lines + 1;
+                    }
+                }
+                else {
+                    if (cur_scroll_lines < (target_scroll_lines + SCR_BUF_HEIGHT - 16)) {
+                        new_scroll_lines = target_scroll_lines + SCR_BUF_HEIGHT - 16;
+                    }
+                    else {
+                        new_scroll_lines = frame_scroll_lines + 1;
+                    }
+                }
+                if (new_scroll_lines >= SCR_BUF_HEIGHT)
+                    new_scroll_lines -= SCR_BUF_HEIGHT;
+                frame_scroll_lines = new_scroll_lines;
+            }
+        }
+        // Poll USB
+        usbhid_polling();
     }
 }

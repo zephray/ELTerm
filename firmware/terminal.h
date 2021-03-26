@@ -22,3 +22,6 @@
 #pragma once
 
 void term_main();
+// Process char from UART side
+void term_process_char(char c);
+void term_process_string(char *str);

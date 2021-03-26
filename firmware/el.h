@@ -45,7 +45,7 @@
 #define SCR_WIDTH (640)
 #define SCR_HEIGHT (480)
 // Additional line for smooth scrolling
-#define SCR_ADD_HEIGHT (16)
+#define SCR_ADD_HEIGHT (32)
 #define SCR_BUF_HEIGHT (SCR_HEIGHT + SCR_ADD_HEIGHT)
 #define SCR_LINE_TRANSFERS (SCR_WIDTH / 4)
 #define SCR_STRIDE (SCR_WIDTH / 8)

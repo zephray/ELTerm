@@ -27,6 +27,7 @@
 #define FLAG_STHROUGH (0x10)
 #define FLAG_SLOWBLINK (0x08)
 #define FLAG_FASTBLINK (0x04)
+#define FLAG_INVERT (0x02)
 
 void graph_put_pixel(int x, int y, int c);
 void graph_fill_rect(int x1, int y1, int x2, int y2, int c);

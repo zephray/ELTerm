@@ -208,14 +208,24 @@ void graph_put_char(int x, int y, char c, char cl_fg, char cl_bg, char flags) {
     int x_byte = x / 8;
     uint8_t *dst0 = framebuf_bp0 + y * SCR_STRIDE + x_byte;
     uint8_t *dst1 = framebuf_bp1 + y * SCR_STRIDE + x_byte;
-    uint8_t bg_bp0_mask_odd  = bp0_masks_odd[cl_bg];
-    uint8_t bg_bp0_mask_even = bp0_masks_even[cl_bg];
-    uint8_t bg_bp1_mask_odd  = bp1_masks_odd[cl_bg];
-    uint8_t bg_bp1_mask_even = bp1_masks_even[cl_bg];
-    uint8_t fg_bp0_mask_odd  = bp0_masks_odd[cl_fg];
-    uint8_t fg_bp0_mask_even = bp0_masks_even[cl_fg];
-    uint8_t fg_bp1_mask_odd  = bp1_masks_odd[cl_fg];
-    uint8_t fg_bp1_mask_even = bp1_masks_even[cl_fg];
+    char fg, bg;
+    if (flags & FLAG_INVERT) {
+        fg = cl_bg;
+        bg = cl_fg;
+    }
+    else {
+        fg = cl_fg;
+        bg = cl_bg;
+    }
+        
+    uint8_t bg_bp0_mask_odd  = bp0_masks_odd[bg];
+    uint8_t bg_bp0_mask_even = bp0_masks_even[bg];
+    uint8_t bg_bp1_mask_odd  = bp1_masks_odd[bg];
+    uint8_t bg_bp1_mask_even = bp1_masks_even[bg];
+    uint8_t fg_bp0_mask_odd  = bp0_masks_odd[fg];
+    uint8_t fg_bp0_mask_even = bp0_masks_even[fg];
+    uint8_t fg_bp1_mask_odd  = bp1_masks_odd[fg];
+    uint8_t fg_bp1_mask_even = bp1_masks_even[fg];
 
     *dst0 = bg_bp0_mask_even;
     *dst1 = bg_bp1_mask_even;

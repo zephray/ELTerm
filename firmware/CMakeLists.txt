@@ -27,16 +27,19 @@ target_sources(elterm PRIVATE
         graphics.c
         terminal.c
         serial.c
+        usbhid.c
         )
 
 pico_set_program_name(elterm "elterm")
 pico_set_program_version(elterm "0.1")
 
-pico_enable_stdio_uart(elterm 0)
+pico_enable_stdio_uart(elterm 1)
 pico_enable_stdio_usb(elterm 0)
 
+target_include_directories(elterm PRIVATE ${CMAKE_CURRENT_LIST_DIR})
+
 # Add the standard library to the build
-target_link_libraries(elterm pico_stdlib hardware_dma)
+target_link_libraries(elterm pico_stdlib hardware_dma tinyusb_host tinyusb_board)
 
 # Add any user requested libraries
 target_link_libraries(elterm

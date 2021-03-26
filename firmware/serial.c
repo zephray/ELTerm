@@ -56,6 +56,12 @@ bool serial_getc(char *c) {
         rdptr = new_rdptr;
         return true;
     }
+    else {
+        if (uart_is_readable(UART_ID)) {
+            *c = uart_getc(UART_ID);
+            return true;
+        }
+    }
     return false;
 }
 
@@ -65,10 +71,11 @@ void serial_init() {
     gpio_set_function(UART_RX_PIN, GPIO_FUNC_UART);
 
     int actual = uart_set_baudrate(UART_ID, BAUD_RATE);
+    printf("Actual baud: %d", actual);
 
     uart_set_hw_flow(UART_ID, false, false);
     uart_set_format(UART_ID, DATA_BITS, STOP_BITS, PARITY);
-    uart_set_fifo_enabled(UART_ID, false);
+    //uart_set_fifo_enabled(UART_ID, false);
 
     int UART_IRQ = UART_ID == uart0 ? UART0_IRQ : UART1_IRQ;
 
@@ -76,4 +83,15 @@ void serial_init() {
     irq_set_enabled(UART_IRQ, true);
 
     uart_set_irq_enables(UART_ID, true, false);
+}
+
+void serial_putc(char c) {
+    uart_putc_raw(UART_ID, c);
+}
+
+void serial_puts(char *s) {
+    // Unlike uart_puts, this does not do any CR/LF conversion
+    while (*s) {
+        uart_putc_raw(UART_ID, *s++);
+    }
 }

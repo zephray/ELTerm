@@ -25,3 +25,8 @@ void term_main();
 // Process char from UART side
 void term_process_char(char c);
 void term_process_string(char *str);
+// Handle key input from keyboard
+bool term_key_pressed(uint8_t keycode, bool is_shift, bool is_ctrl);
+bool term_key_released(uint8_t keycode);
+// Handle key mapping changes in special mode
+bool term_decode_special_keymode(uint8_t keycode, bool is_shift, bool is_ctrl);

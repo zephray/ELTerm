@@ -71,7 +71,6 @@ void serial_init() {
     gpio_set_function(UART_RX_PIN, GPIO_FUNC_UART);
 
     int actual = uart_set_baudrate(UART_ID, BAUD_RATE);
-    printf("Actual baud: %d", actual);
 
     uart_set_hw_flow(UART_ID, false, false);
     uart_set_format(UART_ID, DATA_BITS, STOP_BITS, PARITY);

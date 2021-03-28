@@ -35,7 +35,6 @@
 #if CFG_TUH_HID_KEYBOARD
 
 CFG_TUSB_MEM_SECTION static hid_keyboard_report_t usb_keyboard_report;
-uint8_t const keycode2ascii[128][2] = {HID_KEYCODE_TO_ASCII};
 
 // look up new key in previous keys
 static inline bool find_key_in_report(hid_keyboard_report_t const *p_report, uint8_t keycode) {
@@ -60,68 +59,16 @@ static inline void process_kbd_report(hid_keyboard_report_t const *p_new_report)
                         p_new_report->modifier & (KEYBOARD_MODIFIER_LEFTSHIFT | KEYBOARD_MODIFIER_RIGHTSHIFT);
                 bool const is_ctrl =
                         p_new_report->modifier & (KEYBOARD_MODIFIER_LEFTCTRL | KEYBOARD_MODIFIER_RIGHTCTRL);
-                uint8_t ch;
-                if (is_ctrl) {
-                    ch = keycode2ascii[p_new_report->keycode[i]][1] & 0xbf;
-                }
-                else {
-                    ch = keycode2ascii[p_new_report->keycode[i]][is_shift ? 1 : 0];
-                }
-                if (p_new_report->keycode[i] == HID_KEY_ARROW_UP) {
-                    serial_puts("\e[A");
-                }
-                else if (p_new_report->keycode[i] == HID_KEY_ARROW_DOWN) {
-                    serial_puts("\e[B");
-                }
-                else if (p_new_report->keycode[i] == HID_KEY_ARROW_RIGHT) {
-                    serial_puts("\e[C");
-                }
-                else if (p_new_report->keycode[i] == HID_KEY_ARROW_LEFT) {
-                    serial_puts("\e[D");
-                }
-                else if (p_new_report->keycode[i] == HID_KEY_F1) {
-                    serial_puts("\eOP");
-                }
-                else if (p_new_report->keycode[i] == HID_KEY_F2) {
-                    serial_puts("\eOQ");
-                }
-                else if (p_new_report->keycode[i] == HID_KEY_F3) {
-                    serial_puts("\eOR");
-                }
-                else if (p_new_report->keycode[i] == HID_KEY_F4) {
-                    serial_puts("\eOS");
-                }
-                else if (p_new_report->keycode[i] == HID_KEY_F5) {
-                    serial_puts("\e[15~");
-                }
-                else if (p_new_report->keycode[i] == HID_KEY_F6) {
-                    serial_puts("\e[17~");
-                }
-                else if (p_new_report->keycode[i] == HID_KEY_F7) {
-                    serial_puts("\e[18~");
-                }
-                else if (p_new_report->keycode[i] == HID_KEY_F8) {
-                    serial_puts("\e[19~");
-                }
-                else if (p_new_report->keycode[i] == HID_KEY_F9) {
-                    serial_puts("\e[20~");
-                }
-                else if (p_new_report->keycode[i] == HID_KEY_F10) {
-                    serial_puts("\e[21~");
-                }
-                else if (p_new_report->keycode[i] == HID_KEY_F11) {
-                    serial_puts("\e[23~");
-                }
-                else if (p_new_report->keycode[i] == HID_KEY_F12) {
-                    serial_puts("\e[24~");
-                }
-                else {
-                    serial_putc(ch);
-                }
-                
+                uint8_t keycode = p_new_report->keycode[i];
+                term_key_pressed(keycode, is_shift, is_ctrl);
             }
         }
-        // TODO example skips key released
+        if (prev_report.keycode[i]) {
+            if (!find_key_in_report(p_new_report, prev_report.keycode[i])) {
+                // key released
+                term_key_released(prev_report.keycode[i]);
+            }
+        }
     }
 
     prev_report = *p_new_report;

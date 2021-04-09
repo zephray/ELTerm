@@ -79,8 +79,6 @@ static void el_dma_config_chainning(uint chan, uint chain_to) {
 }
 
 static void el_pio_irq_handler() {
-    gpio_put(22, 1);
-
     uint8_t *framebuf = frame_state ? framebuf_bp0 : framebuf_bp1;
     frame_state = !frame_state;
 
@@ -163,8 +161,6 @@ static void el_pio_irq_handler() {
             (1u << EL_UDATA_SM) | (1u << EL_LDATA_SM));
 
     frame_sync = 1;
-
-    gpio_put(22, 0);
 }
 
 static void el_sm_init() {
@@ -227,9 +223,6 @@ static void el_dma_init() {
 void el_start() {
     memset(framebuf_bp0, 0x00, SCR_STRIDE * SCR_HEIGHT);
     memset(framebuf_bp1, 0x00, SCR_STRIDE * SCR_HEIGHT);
-
-    gpio_init(22);
-    gpio_set_dir(22, GPIO_OUT);
 
     el_sm_init();
     el_dma_init();

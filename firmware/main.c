@@ -29,7 +29,6 @@
 
 int main()
 {
-    board_init();
     stdio_init_all();
     el_start();
     serial_init();

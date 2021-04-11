@@ -33,6 +33,7 @@ typedef struct {
 #include "test_basics.h"
 #include "test_basic_escape.h"
 #include "test_csi.h"
+#include "test_modes.h"
 
 TEST_VECTOR *tests[] = {
     &test_text_input,
@@ -45,10 +46,39 @@ TEST_VECTOR *tests[] = {
     &test_esc_ind,
     &test_esc_nel,
     &test_esc_ri,
+    &test_esc_decscrc,
+    &test_csi_ich1,
+    &test_csi_ich2,
     &test_csi_cuu1,
     &test_csi_cuu2,
     &test_csi_cud1,
     &test_csi_cud2,
+    &test_csi_cuf1,
+    &test_csi_cuf2,
+    &test_csi_cub1,
+    &test_csi_cub2,
+    &test_csi_cnl1,
+    &test_csi_cpl1,
+    &test_csi_cha,
+    &test_csi_cup,
+    &test_csi_cht,
+    &test_csi_ed1,
+    &test_csi_ed2,
+    &test_csi_ed3,
+    &test_csi_el1,
+    &test_csi_el2,
+    &test_csi_el3,
+    &test_csi_il1,
+    &test_csi_dl1,
+    &test_csi_dch1,
+    &test_csi_dch2,
+    &test_csi_su,
+    &test_csi_sd,
+    &test_csi_ech,
+    &test_csi_cbt,
+    &test_csi_rep,
+    &test_mode_insert1,
+    &test_mode_insert2
 };
 
 #define TEST_COUNT (int)(sizeof(tests) / sizeof(TEST_VECTOR *))

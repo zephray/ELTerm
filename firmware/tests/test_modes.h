@@ -21,53 +21,28 @@
 //
 #pragma once
 
-TEST_VECTOR test_esc_ind = {
-    .name = "esc ind",
-    .input_sequence = "Hello, world!\eDTest",
+TEST_VECTOR test_mode_insert1 = {
+    .name = "mode insert 1",
+    .input_sequence = "Hello, world!\nSecond line\e[2D\e[A\e[4h123\e[4l",
     .expected_screen = {
-        "Hello, world!",
-        "             Test",
+        "Hello, wo123rld!",
+        "Second line",
         0
     },  
     .expected_serial = "",
-    .expected_cursor_x = 17,
-    .expected_cursor_y = 1
-};
-
-TEST_VECTOR test_esc_nel = {
-    .name = "esc nel",
-    .input_sequence = "Hello, world!\eETest",
-    .expected_screen = {
-        "Hello, world!",
-        "Test",
-        0
-    },  
-    .expected_serial = "",
-    .expected_cursor_x = 4,
-    .expected_cursor_y = 1
-};
-
-TEST_VECTOR test_esc_ri = {
-    .name = "esc ri",
-    .input_sequence = "Hello, world!\nTest\eM12",
-    .expected_screen = {
-        "Hell12 world!",
-        "Test",
-        0
-    },  
-    .expected_serial = "",
-    .expected_cursor_x = 6,
+    .expected_cursor_x = 12,
     .expected_cursor_y = 0
 };
 
-TEST_VECTOR test_esc_decscrc = {
-    .name = "esc decsc/rc",
-    .input_sequence = "Hello, world!\b\b\e7\b\b\e812",
+TEST_VECTOR test_mode_insert2 = {
+    .name = "mode insert 2",
+    .input_sequence = "Hello, world!\nSecond line\e[2D\e[A\e[4h1234567891011289053489058349068368596845060523423290584395843085906854085\e[4l",
     .expected_screen = {
-        "Hello, worl12",
+        "Hello, wo12345678910112890534890583490683685968450605234232905843958430859068540",
+        "85Second line",
         0
     },  
     .expected_serial = "",
-    .expected_cursor_x = 13,
-    .expected_cursor_y = 0
+    .expected_cursor_x = 2,
+    .expected_cursor_y = 1
 };

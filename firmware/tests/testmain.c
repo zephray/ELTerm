@@ -140,7 +140,7 @@ int main(int argc, char *argv[]) {
     }
     printf("%d of %d tests passed.\n", successCount, TEST_COUNT);
 #else
-    runtestOnTerminal(tests[13]);
+    runtestOnTerminal(tests[42]);
 #endif
 
     return 0;

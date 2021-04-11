@@ -39,14 +39,12 @@
 - Primary DA: CSI Ps c, Send Device Attributes
 - VPA: CSI Pm d, Line Position Absolute \[row\]
 - HVP: CSI Ps ; Ps f, Horizontal and Vertical Position \[row;column\]
-- TBC: CSI Ps g, Tab Clear
 - AM: CSI 2 h, Keyboard Action Mode
 - IRM: CSI 4 h, Insert Mode
 - SRM: CSI 12 h, Send/receive
 - LNM: CSI 20 h, Automatic Newline
 - DECCKM: CSI ? 1 h, Application Cursor Keys
 - DECAWM: CSI ? 7 h, Wraparound Mode
-- DECARM: CSI ? 8 h, Auto-repeat Keys
 - att610: CSI ? 12 h, Start Blinking Cursor
 - DECTCEM: CSI ? 25 h, Show Cursor
 - 47: CSI ? 47 h, Use Alternate Screen Buffer
@@ -96,12 +94,14 @@
 - DECSED: CSI ? Ps J, Erase in Display
 - DECSEL: CSI ? Ps K, Erase in Line
 - Mouse Tracking: CSI Ps ; Ps ; Ps ; Ps ; Ps T
+- TBC: CSI Ps g, Tab Clear
 - DECANM: CSI ? 2 h, Designate USASCII for character sets G0-G3
 - DECANM: CSI ? 2 h, Designate USASCII for character sets G0-G3
 - DECCOLM: CSI ? 3 h, 132 Column Mode
 - DECSCLM: CSI ? 4 h, Smooth (Slow) Scroll
 - DECSCNM: CSI ? 5 h, Reverse Video
 - DECOM: CSI ? 6 h, Origin Mode
+- DECARM: CSI ? 8 h, Auto-repeat Keys
 - Mouse Tracking: CSI ? 9 h: Send Mouse X & Y on button press
 - DECPFF: CSI ? 18 h, Print form feed
 - DECPEX: CSI ? 19 h, Set print extent to full screen

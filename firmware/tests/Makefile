@@ -5,7 +5,7 @@ OBJS = testmain.o ../termcore.o
 all: test
 
 clean:
-	rm test ${OBJS}
+	rm -f test ${OBJS}
 
 test: ${OBJS}
 	${CC} ${CFLAGS} ${INCLUDES} -o $@ ${OBJS} ${LDLIBS}

@@ -51,6 +51,8 @@ static char current_color = DEFAULT_COLOR;
 static char current_flag = 0;
 // Saved cursor for DECSC and DECRC
 static int saved_x, saved_y;
+// Saved cursor for alternative buffer
+static int alt_x, alt_y;
 static char saved_color, saved_flag;
 // Modes
 static bool mode_auto_warp = true;
@@ -59,6 +61,8 @@ bool mode_app_cursor = false;
 static bool mode_cursor_blinking = true;
 static bool mode_show_cursor = true;
 static bool mode_insert = false;
+static bool mode_auto_newline = false;
+char last_graph_char = '\0';
 
 static bool pending_wrap = false;
 
@@ -119,7 +123,6 @@ static void term_cursor_set(int x, int y) {
     term_state_dirty = true;
 }
 
-
 // DECSET
 static void term_dec_modeset(int mode, bool enable) {
     if (mode == 1) {
@@ -134,12 +137,35 @@ static void term_dec_modeset(int mode, bool enable) {
     else if (mode == 25) {
         mode_show_cursor = enable;
     }
-    else if (mode == 1049) {
+    else if ((mode == 47) || (mode == 1047)) {
         // Use Alternate Screen Buffer
         if (enable)
             term_state_back = &term_state_back_alternate;
         else
             term_state_back = &term_state_back_main;
+    }
+    else if (mode == 1048) {
+        if (enable) {
+            alt_x = term_state_back->x;
+            alt_y = term_state_back->y;
+        }
+        else {
+            term_state_back->x = alt_x;
+            term_state_back->y = alt_y;
+        }
+    }
+    else if (mode == 1049) {
+        // Use Alternate Screen Buffer with clearing, save cursors
+        if (enable) {
+            term_state_back = &term_state_back_alternate;
+            alt_x = term_state_back->x;
+            alt_y = term_state_back->y;
+        }
+        else {
+            term_state_back = &term_state_back_main;
+            term_state_back->x = alt_x;
+            term_state_back->y = alt_y;
+        }   
         memset(term_state_back, 0, sizeof(*term_state_back));
         term_state_dirty = true;
     }
@@ -155,6 +181,9 @@ static void term_dec_modeset(int mode, bool enable) {
 static void term_modeset(int mode, bool enable) {
     if (mode == 4) {
         mode_insert = enable;
+    }
+    else if (mode == 20) {
+        mode_auto_newline = enable;
     }
     else {
         fprintf(stderr, "Unsupported mode: %d", mode);
@@ -197,10 +226,44 @@ static void term_cursor_up(int lines) {
     term_cursor_set(x, y);
 }
 
+static void term_forward_tab() {
+    term_cursor_check();
+    int x, y;
+    x = term_state_back->x + 8;
+    x &= ~7;
+    y = term_state_back->y;
+    
+    if (x >= TERM_WIDTH) {
+        for (int i = term_state_back->x; i < TERM_WIDTH; i++) {
+            term_put_char(i, y, 0x20);
+        }
+        if (mode_auto_warp) {
+            pending_wrap = true;
+        }
+        term_cursor_set(TERM_WIDTH - 1, y);
+    }
+    else {
+        for (int i = term_state_back->x; i < x; i++) {
+            term_put_char(i, y, 0x20);
+        }
+        term_cursor_set(x, y);
+    }
+}
+
+static void term_backward_tab() {
+    int x, y;
+    x = term_state_back->x - 1;
+    x &= ~7;
+    y = term_state_back->y;
+    if (x < 0) x = 0;
+    
+    term_cursor_set(x, y);
+}
+
 static void term_shift_right(int shift) {
     int x = term_state_back->x;
     int y = term_state_back->y;
-    for (int xx = TERM_WIDTH; xx >= x + shift; xx++) {
+    for (int xx = TERM_WIDTH - 1; xx >= x + shift; xx--) {
         term_state_back->textmap[y][xx] = term_state_back->textmap[y][xx - shift];
         term_state_back->colormap[y][xx] = term_state_back->colormap[y][xx - shift];
         term_state_back->flagmap[y][xx] = term_state_back->flagmap[y][xx - shift];
@@ -211,6 +274,40 @@ static void term_shift_right(int shift) {
         term_state_back->textmap[y][xx] = ' ';
         term_state_back->colormap[y][xx] = current_color;
         term_state_back->flagmap[y][xx] = current_flag;
+    }
+    term_state_dirty = true;
+}
+
+static void term_shift_down(int shift) {
+    int x = term_state_back->x;
+    int y = term_state_back->y;
+    for (int yy = TERM_BUF_HEIGHT - 1; yy >= y + shift; yy--){
+        memcpy(term_state_back->textmap[yy], term_state_back->textmap[yy - shift], TERM_WIDTH);
+        memcpy(term_state_back->colormap[yy], term_state_back->colormap[yy - shift], TERM_WIDTH);
+        memcpy(term_state_back->flagmap[yy], term_state_back->flagmap[yy - shift], TERM_WIDTH);
+    }
+    for (int yy = y; yy < y + shift; yy++) {
+        if (yy >= TERM_BUF_HEIGHT)
+            break;
+        memset(term_state_back->textmap[yy], ' ', TERM_WIDTH);
+        memset(term_state_back->colormap[yy], current_color, TERM_WIDTH);
+        memset(term_state_back->flagmap[yy], current_flag, TERM_WIDTH);
+    }
+    term_state_dirty = true;
+}
+
+static void term_shift_up(int shift) {
+    int x = term_state_back->x;
+    int y = term_state_back->y;
+    for (int yy = y; yy < TERM_BUF_HEIGHT - shift; yy++){
+        memcpy(term_state_back->textmap[yy], term_state_back->textmap[yy + shift], TERM_WIDTH);
+        memcpy(term_state_back->colormap[yy], term_state_back->colormap[yy + shift], TERM_WIDTH);
+        memcpy(term_state_back->flagmap[yy], term_state_back->flagmap[yy + shift], TERM_WIDTH);
+    }
+    for (int yy = TERM_BUF_HEIGHT - shift; yy < TERM_BUF_HEIGHT; yy++) {
+        memset(term_state_back->textmap[yy], ' ', TERM_WIDTH);
+        memset(term_state_back->colormap[yy], current_color, TERM_WIDTH);
+        memset(term_state_back->flagmap[yy], current_flag, TERM_WIDTH);
     }
     term_state_dirty = true;
 }
@@ -240,7 +337,9 @@ static void term_reset() {
     mode_cursor_blinking = true;
     mode_show_cursor = true;
     mode_insert = false;
+    mode_auto_newline = false;
     pending_wrap = false;
+    last_graph_char = '\0';
     term_state_back = &term_state_back_main;
     memset(term_state_back, 0, sizeof(*term_state_back));
 }
@@ -265,7 +364,8 @@ void term_process_char(uint8_t c) {
         else if (c == 0x0d) {
             // CR
             term_cursor_set(0, term_state_back->y);
-            //term_scroll();
+            if (mode_auto_newline)
+                term_scroll();
         }
         else if ((c == 0x0a) || (c == 0x0b) || (c == 0x0c)) {
             // LF
@@ -274,24 +374,7 @@ void term_process_char(uint8_t c) {
         }
         else if (c == 0x09) {
             // Tab
-            term_cursor_check();
-            x = term_state_back->x + 7;
-            x &= ~7;
-            y = term_state_back->y;
-            
-            if (x >= TERM_WIDTH) {
-                for (int i = term_state_back->x; i < TERM_WIDTH; i++) {
-                    term_put_char(i, y, 0x20);
-                }
-                term_cursor_set(0, y);
-                term_scroll();
-            }
-            else {
-                for (int i = term_state_back->x; i < x; i++) {
-                    term_put_char(i, y, 0x20);
-                }
-                term_cursor_set(x, y);
-            }
+            term_forward_tab();
         }
         else if (c == 0x07) {
             // Bell
@@ -303,9 +386,12 @@ void term_process_char(uint8_t c) {
             fprintf(stderr, "IAC?\n");
         }
         else {
+            last_graph_char = c;
             if (mode_insert) {
+                term_cursor_check();
                 term_shift_right(1);
-                term_put_char(x, y, c);
+                term_put_char(term_state_back->x, term_state_back->y, c);
+                term_cursor_forward();
             }
             else {
                 term_cursor_check();
@@ -519,13 +605,38 @@ void term_process_char(uint8_t c) {
                 term_cursor_set(x, y);
                 state = ST_NORMAL;
             }
-            else if (c == 'G') {
+            else if (c == 'E') {
+                // CNL: next line
+                if (arg_counter == 0) csi_codes[0] = 1;
+                term_cursor_down(csi_codes[0]);
+                term_cursor_set(0, term_state_back->y);
+                state = ST_NORMAL;
+            }
+            else if (c == 'F') {
+                // CPL: previous line
+                if (arg_counter == 0) csi_codes[0] = 1;
+                term_cursor_up(csi_codes[0]);
+                term_cursor_set(0, term_state_back->y);
+                state = ST_NORMAL;
+            }
+            else if ((c == 'G') || (c == '`')) {
+                // CHA: Cursor Character Absolute
+                // HPA: Character Position Absolute
                 if (arg_counter == 0) csi_codes[0] = 1;
                 x = csi_codes[0] - 1;
                 term_cursor_set(x, y);
                 state = ST_NORMAL;
             }
+            else if (c == 'I') {
+                // CHT
+                if (arg_counter == 0) csi_codes[0] = 1;
+                for (int i = 0; i < csi_codes[0]; i++) {
+                    term_forward_tab();
+                }
+                state = ST_NORMAL;
+            }
             else if (c == 'd') {
+                // VPA
                 if (arg_counter == 0) csi_codes[0] = 1;
                 y = csi_codes[0] - 1;
                 term_cursor_set(x, y);
@@ -557,7 +668,7 @@ void term_process_char(uint8_t c) {
                 }
                 else if (csi_codes[0] == 1) {
                     for (int xx = 0; xx <= x; xx++) {
-                        term_put_char(x, y, ' ');
+                        term_put_char(xx, y, ' ');
                     }
                 }
                 else {
@@ -599,6 +710,18 @@ void term_process_char(uint8_t c) {
                 }
                 state = ST_NORMAL;
             }
+            else if (c == 'L') {
+                // IL: Insert Lines
+                if (arg_counter == 0) csi_codes[0] = 1;
+                term_shift_down(csi_codes[0]);
+                state = ST_NORMAL;
+            }
+            else if (c == 'M') {
+                // DL: Delete Lines
+                if (arg_counter == 0) csi_codes[0] = 1;
+                term_shift_up(csi_codes[0]);
+                state = ST_NORMAL;
+            }
             else if (c == 'n') {
                 // DSR: Device Status Report
                 if (csi_codes[0] == 5) {
@@ -616,30 +739,28 @@ void term_process_char(uint8_t c) {
             }
             else if (c == '@') {
                 // ICH: Insert Character
-                if (arg_counter == 1) {
-                    int shift = csi_codes[0];
-                    term_shift_right(shift);
-                }
+                if (arg_counter == 0) csi_codes[0] = 1;
+                int shift = csi_codes[0];
+                term_shift_right(shift);
                 state = ST_NORMAL;
             }
             else if (c == 'P') {
                 // DCH: Delete Character
-                if (arg_counter == 1) {
-                    int shift = csi_codes[0];
-                    if (shift > (TERM_WIDTH - x))
-                        shift = TERM_WIDTH - x;
-                    for (int xx = x; xx < (TERM_WIDTH - shift); xx++) {
-                        term_state_back->textmap[y][xx] = term_state_back->textmap[y][xx + shift];
-                        term_state_back->colormap[y][xx] = term_state_back->colormap[y][xx + shift];
-                        term_state_back->flagmap[y][xx] = term_state_back->flagmap[y][xx + shift];
-                    }
-                    for (int xx = TERM_WIDTH - shift; xx < TERM_WIDTH; xx++) {
-                        term_state_back->textmap[y][xx] = ' ';
-                        term_state_back->colormap[y][xx] = current_color;
-                        term_state_back->flagmap[y][xx] = current_flag;
-                    }
-                    term_state_dirty = true;
+                if (arg_counter == 0) csi_codes[0] = 1;
+                int shift = csi_codes[0];
+                if (shift > (TERM_WIDTH - x))
+                    shift = TERM_WIDTH - x;
+                for (int xx = x; xx < (TERM_WIDTH - shift); xx++) {
+                    term_state_back->textmap[y][xx] = term_state_back->textmap[y][xx + shift];
+                    term_state_back->colormap[y][xx] = term_state_back->colormap[y][xx + shift];
+                    term_state_back->flagmap[y][xx] = term_state_back->flagmap[y][xx + shift];
                 }
+                for (int xx = TERM_WIDTH - shift; xx < TERM_WIDTH; xx++) {
+                    term_state_back->textmap[y][xx] = ' ';
+                    term_state_back->colormap[y][xx] = current_color;
+                    term_state_back->flagmap[y][xx] = current_flag;
+                }
+                term_state_dirty = true;
                 state = ST_NORMAL;
             }
             else if (c == 'X') {
@@ -656,6 +777,40 @@ void term_process_char(uint8_t c) {
                     term_state_dirty = true;
                 }
                 state = ST_NORMAL;
+            }
+            else if (c == 'S') {
+                // SU: Shift Up
+                if (arg_counter == 0) csi_codes[0] = 1;
+                int y = term_state_back->y;
+                term_state_back->y = 0;
+                term_shift_up(csi_codes[0]);
+                term_state_back->y = y;
+                state = ST_NORMAL;
+            }
+            else if (c == 'T') {
+                // SD: Shift Down
+                if (arg_counter == 0) csi_codes[0] = 1;
+                int y = term_state_back->y;
+                term_state_back->y = 0;
+                term_shift_down(csi_codes[0]);
+                term_state_back->y = y;
+                state = ST_NORMAL;
+            }
+            else if (c == 'Z') {
+                // CBT
+                if (arg_counter == 0) csi_codes[0] = 1;
+                for (int i = 0; i < csi_codes[0]; i++) {
+                    term_backward_tab();
+                }
+                state = ST_NORMAL;
+            }
+            else if (c == 'b') {
+                // REP: Repeat last graph char
+                if (arg_counter == 0) csi_codes[0] = 1;
+                state = ST_NORMAL;
+                for (int i = 0; i < csi_codes[0]; i++) {
+                    term_process_char(last_graph_char);
+                }
             }
             else if (c == 'r') {
                 // DECSTBM: Set Scrolling Region

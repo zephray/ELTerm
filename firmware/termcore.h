@@ -60,6 +60,8 @@ extern bool term_state_dirty; // Set by termcore, clear by the front end
 // Mode exposed to front end
 extern bool mode_app_keypad;
 extern bool mode_app_cursor;
+extern bool mode_cursor_blinking;
+extern bool mode_show_cursor;
 
 // Needs to be implemented by user:
 extern void serial_puts(char *string);

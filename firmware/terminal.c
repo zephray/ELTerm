@@ -21,6 +21,7 @@
 //
 
 #include <stdio.h>
+#include <stdarg.h>
 #include <string.h>
 #include <stdlib.h>
 #include "pico/stdlib.h"
@@ -49,6 +50,8 @@ static bool key_is_ctrl = false;
 #define MAX_UPDATE (80 * 10)
 
 static volatile bool timer_pending = false;
+
+static bool cursor_state = false;
 
 void term_clear_cursor() {
     int x = term_state_front->x;
@@ -332,6 +335,23 @@ void term_update_screen() {
     term_state_dirty = false;
 }
 
+int term_printf(const char *format, ...) {
+    char printf_buffer[256];
+
+    int length = 0;
+
+    va_list ap;
+    va_start(ap, format);
+
+    length = vsnprintf(printf_buffer, 256, format, ap);
+
+    va_end(ap);
+
+    term_process_string(printf_buffer);
+
+    return length;
+}
+
 void term_main() {
     char c;
 
@@ -343,6 +363,7 @@ void term_main() {
     gpio_set_dir(25, GPIO_OUT);
 
     term_full_reset();
+    cursor_state = false;
     memset(term_state_front, 0, sizeof(*term_state_front));
 
     term_process_string("ELTerm 0.01\r\n");

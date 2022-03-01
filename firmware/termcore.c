@@ -24,6 +24,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <stdbool.h>
 #include "termcore.h"
 #include "graphics.h"
@@ -45,8 +46,6 @@ static TERM_STATE term_state_back_alternate;
 
 TERM_STATE *term_state_back = &term_state_back_main;
 bool term_state_dirty = false;
-
-static bool cursor_state = false;
 static char current_color = DEFAULT_COLOR;
 static char current_flag = 0;
 // Saved cursor for DECSC and DECRC
@@ -58,8 +57,8 @@ static char saved_color, saved_flag;
 static bool mode_auto_warp = true;
 bool mode_app_keypad = false;
 bool mode_app_cursor = false;
-static bool mode_cursor_blinking = true;
-static bool mode_show_cursor = true;
+bool mode_cursor_blinking = true;
+bool mode_show_cursor = true;
 static bool mode_insert = false;
 static bool mode_auto_newline = false;
 char last_graph_char = '\0';
@@ -917,5 +916,4 @@ void term_process_string(char *str) {
 void term_full_reset(void) {
     term_reset();
     memset(&term_state_back_alternate, 0, sizeof(term_state_back_alternate));
-    cursor_state = false;
 }

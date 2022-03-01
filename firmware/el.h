@@ -21,19 +21,19 @@
 //
 #pragma once
 
-#define VSYNC_PIN (4)
-#define HSYNC_PIN (6)
-#define PIXCLK_PIN (7)
+#define VSYNC_PIN (15)
+#define HSYNC_PIN (14)
+#define PIXCLK_PIN (4)
 // UD0-3: 5-8
-#define UD0_PIN (12)
-#define UD1_PIN (13)
-#define UD2_PIN (14)
-#define UD3_PIN (15)
+#define UD0_PIN (6)
+#define UD1_PIN (7)
+#define UD2_PIN (8)
+#define UD3_PIN (9)
 // LD0-3: 9-12
-#define LD0_PIN (8)
-#define LD1_PIN (9)
-#define LD2_PIN (10)
-#define LD3_PIN (11)
+#define LD0_PIN (10)
+#define LD1_PIN (11)
+#define LD2_PIN (12)
+#define LD3_PIN (13)
 
 // PIO related
 #define EL_UDATA_SM (0)

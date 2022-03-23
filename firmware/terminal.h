@@ -21,11 +21,12 @@
 //
 #pragma once
 
-void term_main();
+void term_init();
+void term_loop();
 // Print from internal
 int term_printf(const char *format, ...);
 // Handle key input from keyboard
-bool term_key_pressed(uint8_t keycode, bool is_shift, bool is_ctrl);
-bool term_key_released(uint8_t keycode);
+void term_key_pressed(uint8_t keycode, bool is_shift, bool is_ctrl);
+void term_key_released(uint8_t keycode);
 // Handle key mapping changes in special mode
 bool term_decode_special_keymode(uint8_t keycode, bool is_shift, bool is_ctrl);

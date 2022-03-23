@@ -269,7 +269,7 @@ void term_key_sendcode(uint8_t keycode, bool is_shift, bool is_ctrl) {
     }
 }
 
-bool term_key_pressed(uint8_t keycode, bool is_shift, bool is_ctrl) {
+void term_key_pressed(uint8_t keycode, bool is_shift, bool is_ctrl) {
     for (int i = 0; i < MAX_PRESSED_KEYS; i++) {
         if (key_pressed_code[i] == 0) {
             key_pressed_code[i] = keycode;
@@ -282,7 +282,7 @@ bool term_key_pressed(uint8_t keycode, bool is_shift, bool is_ctrl) {
     }
 }
 
-bool term_key_released(uint8_t keycode) {
+void term_key_released(uint8_t keycode) {
     for (int i = 0; i < MAX_PRESSED_KEYS; i++) {
         if (key_pressed_code[i] == keycode) {
             key_pressed_code[i] = 0;
@@ -352,11 +352,8 @@ int term_printf(const char *format, ...) {
     return length;
 }
 
-void term_main() {
-    char c;
-
-    struct repeating_timer timer;
-    int timer_div = 0;
+void term_init() {
+    static repeating_timer_t timer;
 
     add_repeating_timer_ms(-100, term_timer_callback, NULL, &timer);
     gpio_init(25);
@@ -367,7 +364,6 @@ void term_main() {
     memset(term_state_front, 0, sizeof(*term_state_front));
 
     term_process_string("ELTerm 0.01\r\n");
-
 #if 0
     uint64_t timediff = time_us_64();
     char fg = 1;
@@ -401,68 +397,71 @@ void term_main() {
 
     while(1);
 #endif
+}
 
-    while (1) {
-        // Process timing related work
-        if (timer_pending) {
-            // Timer interval: 100ms
-            timer_pending = false;
+void term_loop() {
+    static int timer_div = 0;
+    char c;
 
-            timer_div++;
-            if (timer_div == 5) {
-                // Cursor update every 500ms
-                cursor_state = !cursor_state;
-                term_update_cursor();
-                gpio_put(25, cursor_state);
-                timer_div = 0;
+    // Process timing related work
+    if (timer_pending) {
+        // Timer interval: 100ms
+        timer_pending = false;
+
+        timer_div++;
+        if (timer_div == 5) {
+            // Cursor update every 500ms
+            cursor_state = !cursor_state;
+            term_update_cursor();
+            gpio_put(25, cursor_state);
+            timer_div = 0;
+        }
+
+        // Key repeat
+        for (int i = 0; i < MAX_PRESSED_KEYS; i++) {
+            if ((key_pressed_code[i] != 0) &&
+                    ((time_us_32() - key_pressed_since[i]) > 1000000)) {
+                term_key_sendcode(key_pressed_code[i], key_is_shift, key_is_ctrl);
             }
-
-            // Key repeat
-            for (int i = 0; i < MAX_PRESSED_KEYS; i++) {
-                if ((key_pressed_code[i] != 0) &&
-                        ((time_us_32() - key_pressed_since[i]) > 1000000)) {
-                    term_key_sendcode(key_pressed_code[i], key_is_shift, key_is_ctrl);
-                }
-            }
-            
         }
-        // Process all chars in the FIFO
-        while (serial_getc(&c)) {
-            term_process_char(c);
-        }
-        // Update up to one char on screen
-        if (term_state_dirty) {
-            term_update_screen();
-        }
-        if (frame_sync) {
-            frame_sync = false;
-            // Smooth scrolling
-            uint32_t cur_scroll_lines = frame_scroll_lines;
-            uint32_t new_scroll_lines;
-            uint32_t target_scroll_lines = term_state_front->y_offset * 16;
-            if (cur_scroll_lines != target_scroll_lines) {
-                if (cur_scroll_lines < target_scroll_lines) {
-                    if (cur_scroll_lines < (target_scroll_lines - 16)) {
-                        new_scroll_lines = target_scroll_lines - 16;
-                    }
-                    else {
-                        new_scroll_lines = frame_scroll_lines + 1;
-                    }
+        
+    }
+    // Process all chars in the FIFO
+    while (serial_getc(&c)) {
+        term_process_char(c);
+    }
+    // Update up to one char on screen
+    if (term_state_dirty) {
+        term_update_screen();
+    }
+    if (frame_sync) {
+        frame_sync = false;
+        // Smooth scrolling
+        uint32_t cur_scroll_lines = frame_scroll_lines;
+        uint32_t new_scroll_lines;
+        uint32_t target_scroll_lines = term_state_front->y_offset * 16;
+        if (cur_scroll_lines != target_scroll_lines) {
+            if (cur_scroll_lines < target_scroll_lines) {
+                if (cur_scroll_lines < (target_scroll_lines - 16)) {
+                    new_scroll_lines = target_scroll_lines - 16;
                 }
                 else {
-                    if (cur_scroll_lines < (target_scroll_lines + SCR_BUF_HEIGHT - 16)) {
-                        new_scroll_lines = target_scroll_lines + SCR_BUF_HEIGHT - 16;
-                    }
-                    else {
-                        new_scroll_lines = frame_scroll_lines + 1;
-                    }
+                    new_scroll_lines = frame_scroll_lines + 1;
                 }
-                if (new_scroll_lines >= SCR_BUF_HEIGHT)
-                    new_scroll_lines -= SCR_BUF_HEIGHT;
-                frame_scroll_lines = new_scroll_lines;
             }
+            else {
+                if (cur_scroll_lines < (target_scroll_lines + SCR_BUF_HEIGHT - 16)) {
+                    new_scroll_lines = target_scroll_lines + SCR_BUF_HEIGHT - 16;
+                }
+                else {
+                    new_scroll_lines = frame_scroll_lines + 1;
+                }
+            }
+            if (new_scroll_lines >= SCR_BUF_HEIGHT)
+                new_scroll_lines -= SCR_BUF_HEIGHT;
+            frame_scroll_lines = new_scroll_lines;
         }
-        // Poll USB
-        usbhid_polling();
     }
+    // Poll USB
+    usbhid_polling();
 }

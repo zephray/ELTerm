@@ -33,9 +33,11 @@ int main()
     el_start();
     serial_init();
     usbhid_init();
-    term_main();
+    term_init();
 
-    while(1);
+    while(1) {
+        term_loop();
+    }
 
     return 0;
 }

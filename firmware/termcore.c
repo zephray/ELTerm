@@ -117,6 +117,8 @@ static void term_cursor_forward() {
 }
 
 static void term_cursor_set(int x, int y) {
+    // Forced update clears pending wrap
+    pending_wrap = false;
     term_state_back->x = x;
     term_state_back->y = y;
     term_state_dirty = true;
@@ -183,6 +185,7 @@ static void term_modeset(int mode, bool enable) {
     }
     else if (mode == 20) {
         mode_auto_newline = enable;
+        printf("Auto new line set to %d\n", enable);
     }
     else {
         fprintf(stderr, "Unsupported mode: %d", mode);
@@ -352,8 +355,14 @@ void term_process_char(uint8_t c) {
     static int osc_type = 0;
     static PARSER_STATE state = ST_NORMAL;
     static bool dec_set = false;
+
+    // ANSI behavior
+    //term_cursor_check(); // force flush?
+
     int x = term_state_back->x;
     int y = term_state_back->y;
+
+    //printf("Processing char %c at %d, %d\n", c, x, y);
 
     if (state == ST_NORMAL) {
         if ((c == 0x08) || (c == 0x7f)) {
@@ -443,6 +452,7 @@ void term_process_char(uint8_t c) {
         }
         else if (c == 'E') {
             // NEL: Next Line
+            term_cursor_check();
             term_scroll();
             term_cursor_set(0, term_state_back->y);
             state = ST_NORMAL;
@@ -521,6 +531,8 @@ void term_process_char(uint8_t c) {
                         current_flag |= FLAG_INVERT; break;
                     case 9: // Croseed out
                         current_flag |= FLAG_STHROUGH; break;
+                    case 10: // Default font, ignored
+                        break;
                     case 22: // Bold off
                         current_flag &= ~FLAG_BOLD; break;
                     case 23: // Italic off

@@ -1,5 +1,10 @@
 {
     "files.associations": {
-        "serial.h": "c"
-    }
+        "serial.h": "c",
+        "graphics.h": "c",
+        "font.h": "c",
+        "el.h": "c",
+        "terminal.h": "c"
+    },
+    "cmake.configureOnOpen": false
 }

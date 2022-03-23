@@ -130,18 +130,16 @@ void graph_fill_rect(int x1, int y1, int x2, int y2, int c) {
         uint8_t bp0_mask_even = bp0_masks_even[c];
         uint8_t bp1_mask_odd  = bp1_masks_odd[c];
         uint8_t bp1_mask_even = bp1_masks_even[c];
-        int stride = SCR_STRIDE - ((x2 - x1) / 8 - 1);
+        int stride = SCR_STRIDE - ((x2 - x1) / 8);
         uint8_t *dst0 = framebuf_bp0 + y1 * SCR_STRIDE + x1 / 8;
         uint8_t *dst1 = framebuf_bp1 + y1 * SCR_STRIDE + x1 / 8;
-        for (int y = y1; y < y2; y+=2) {
+        for (int y = y1; y < y2; y++) {
             for (int x = x1; x < x2; x+=8) {
-                *dst0 = bp0_mask_even;
-                *dst1 = bp1_mask_even;
-                dst0 += stride; dst1 += stride;
-                *dst0 = bp0_mask_odd;
-                *dst1 = bp1_mask_odd;
-                dst0 += stride; dst1 += stride;
+                *dst0++ = (y & 1) ? bp0_mask_odd : bp0_mask_even;
+                *dst1++ = (y & 1) ? bp1_mask_odd : bp1_mask_even;
             }
+            dst0 += stride;
+            dst1 += stride;
         }
     }
     else {

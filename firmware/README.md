@@ -1,4 +1,19 @@
+# Introduction
 
+This folder holds the firmware for the ELterm project. It's designed to run on the ELterm hardware. The code could be compiled with RP2040 SDK.
+
+To build, do:
+
+```
+mkdir build
+cd build
+cmake ..
+make
+```
+
+Some tests are provided in the tests folder. Running ```make && ./test``` to run all the tests.
+
+Additionally, a PC emulator is provided in the pc folder. Running ```make``` to build the firmware for running on Linux/ macOS. The PC emulator is partially based on https://github.com/MurphyMc/lilt, which is also licensed under MIT.
 
 # Features
 
@@ -129,3 +144,7 @@
 - BEL: Ctrl-G
 - 2004: CSI ? 2004 h, Set bracketed paste mode
 - OSC: Operating System Commands
+
+# License
+
+MIT
